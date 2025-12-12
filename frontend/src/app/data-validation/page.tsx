@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import axios from 'axios'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://backend-iuc02-33c44ec6b988.herokuapp.com'
 
 export default function DataValidationPage() {
   const [rdfContent, setRdfContent] = useState('')
