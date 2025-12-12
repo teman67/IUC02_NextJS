@@ -1,0 +1,7 @@
+backend/
+*.pyc
+__pycache__/
+.git/
+.vscode/
+.idea/
+*.log
