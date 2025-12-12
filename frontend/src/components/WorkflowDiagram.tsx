@@ -48,7 +48,7 @@ export default function WorkflowDiagram() {
   return (
     <div className="card animate-slide-up">
       <h3 className="text-2xl font-bold mb-6 text-center text-gray-900">Complete Workflow</h3>
-      <div className="flex justify-center items-center gap-5 flex-wrap">
+      <div className="flex justify-center items-center gap-12 flex-wrap">
         {steps.map((step, index) => (
           <div key={index} className="relative">
             {step.type === 'semantic' && (
@@ -74,32 +74,32 @@ export default function WorkflowDiagram() {
             )}
 
             {step.type === 'fdo' && (
-              <a href={step.url} target="_blank" rel="noopener noreferrer" className="hover-box large-box relative flex items-center justify-center p-6 gap-4 text-lg no-underline" style={{ height: '100px', width: '340px' }}>
+              <a href={step.url} target="_blank" rel="noopener noreferrer" className="hover-box large-box relative flex items-center justify-center p-6 text-lg no-underline" style={{ height: '100px', width: '340px' }}>
+                <span className="block text-center font-bold text-lg">
+                  {step.text}
+                </span>
                 <Image
                   src="https://kit-data-manager.github.io/fairdoscope/images/logo.png"
                   alt="FDO"
                   width={50}
                   height={50}
-                  className="opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
+                  className="absolute bottom-2 right-2 opacity-80 hover:opacity-100 transition-opacity"
                 />
-                <span className="block text-center font-bold text-lg">
-                  {step.text}
-                </span>
               </a>
             )}
 
             {step.type === 'mse' && (
-              <a href={step.url} target="_blank" rel="noopener noreferrer" className="hover-box large-box relative flex items-center justify-center p-6 gap-4 text-lg no-underline" style={{ height: '100px', width: '340px' }}>
+              <a href={step.url} target="_blank" rel="noopener noreferrer" className="hover-box large-box relative flex items-center justify-center p-6 text-lg no-underline" style={{ height: '100px', width: '340px' }}>
+                <span className="block text-center font-bold text-lg">
+                  {step.text}
+                </span>
                 <Image
                   src="https://cdn-icons-png.flaticon.com/512/14511/14511403.png"
                   alt="MSE Knowledge Graph"
                   width={50}
                   height={50}
-                  className="opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
+                  className="absolute bottom-2 right-2 opacity-80 hover:opacity-100 transition-opacity"
                 />
-                <span className="block text-center font-bold text-lg">
-                  {step.text}
-                </span>
               </a>
             )}
 
@@ -110,7 +110,7 @@ export default function WorkflowDiagram() {
             )}
 
             {index < steps.length - 1 && (
-              <div className="absolute -right-3 top-1/2 -translate-y-1/2 text-3xl text-primary-600 animate-bounce-subtle hidden lg:block">
+              <div className="absolute -right-8 top-1/2 -translate-y-1/2 text-3xl text-primary-600 animate-bounce-subtle hidden lg:block z-10">
                 →
               </div>
             )}
