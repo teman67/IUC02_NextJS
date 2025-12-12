@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Image from 'next/image'
 import axios from 'axios'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://backend-iuc02-33c44ec6b988.herokuapp.com'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function DataGenerationPage() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)

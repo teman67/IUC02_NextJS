@@ -21,8 +21,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://iuc-02-demonstrator.vercel.app",  # Your production frontend
-        os.getenv("FRONTEND_URL", "")  # Additional frontend URL if needed
+        "https://iuc-02-demonstrator.vercel.app", 
+        os.getenv("FRONTEND_URL", "")  # Production frontend URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -30,7 +30,7 @@ app.add_middleware(
 )
 
 # Data directory path
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent / "data"
 
 class ValidationRequest(BaseModel):
     rdf_content: str
