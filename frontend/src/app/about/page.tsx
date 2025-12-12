@@ -12,7 +12,7 @@ export default function AboutPage() {
     { name: "Luis Alexander Ávila Calderón ", affiliation: "Bundesanstalt für Materialforschungund-prüfung(BAM), Berlin, Germany", link: "https://orcid.org/0000-0003-0012-2414" },
     { name: "Amirreza Daei Rezaei Moghaddam", affiliation: "RWTH Aachen, Aachen, Nordrhein-Westfalen, Germany ", link: "https://www.itc.rwth-aachen.de/cms/it-center/it-center/profil/team/~epvp/mitarbeiter-campus-/?gguid=PER-964N3TN&allou=1&lidx=1" },
     { name: "Pavlina Kruzikova", affiliation: "Bundesanstalt für Materialforschungund-prüfung(BAM), Berlin, Germany", link: "https://www.linkedin.com/in/pavlina-kruzikova/?originalSubdomain=de" },
-    { name: "Amirhossein Bayani", affiliation: "Albert-Ludwigs-Universität Freiburg, Freiburg im Breisgau, Baden-Württemberg, Germany", link: "https://www.linkedin.com/in/amirhosseinbayani/" }
+    { name: "Amirhossein Bayani (Developer of the Application)", affiliation: "Albert-Ludwigs-Universität Freiburg, Freiburg im Breisgau, Baden-Württemberg, Germany", link: "https://www.linkedin.com/in/amirhosseinbayani/" }
   ]
 
   const logos = [
