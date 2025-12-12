@@ -21,8 +21,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://*.vercel.app",  # Your Vercel deployments
-        os.getenv("FRONTEND_URL", "")  # Production frontend URL
+        "https://iuc-02-demonstrator.vercel.app",  # Your production frontend
+        os.getenv("FRONTEND_URL", "")  # Additional frontend URL if needed
     ],
     allow_credentials=True,
     allow_methods=["*"],
