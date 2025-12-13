@@ -46,6 +46,13 @@ export default function ChatBox() {
         content: response.data.message
       };
 
+      // Log if response was cached
+      if (response.data.cached) {
+        console.log('⚡ Response retrieved from cache (instant)');
+      } else {
+        console.log('🌐 Response from OpenAI API');
+      }
+
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error: any) {
       console.error('Error sending message:', error);

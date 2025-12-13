@@ -45,16 +45,27 @@ export async function POST(request: NextRequest) {
     // Limit message history to last 10 messages to prevent abuse
     const limitedMessages = messages.slice(-10);
 
-    // Check cache
-    const cacheKey = chatCache.getCacheKey(limitedMessages);
+    // Get the last user message for caching (ignore conversation history)
+    const lastUserMessage = limitedMessages[limitedMessages.length - 1];
+    
+    // Check cache - cache based on user's question only
+    const cacheKey = chatCache.getCacheKey([lastUserMessage]);
     const cachedResponse = chatCache.get(cacheKey);
     
+    console.log('🔍 Cache check:', {
+      userQuestion: lastUserMessage.content.substring(0, 50),
+      cacheHit: !!cachedResponse
+    });
+    
     if (cachedResponse) {
+      console.log('✅ CACHE HIT - Returning cached response');
       return NextResponse.json({ 
         message: cachedResponse,
         cached: true 
       });
     }
+    
+    console.log('❌ CACHE MISS - Calling OpenAI API');
 
     // System message to provide context about the application
     const systemMessage = {
@@ -122,6 +133,7 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
     const assistantMessage = data.choices[0].message.content;
 
     // Cache the response
+    console.log('💾 Storing response in cache');
     chatCache.set(cacheKey, assistantMessage);
 
     return NextResponse.json({ message: assistantMessage });
