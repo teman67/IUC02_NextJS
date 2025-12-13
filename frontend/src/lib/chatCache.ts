@@ -46,7 +46,9 @@ class ChatCache {
     // Implement simple LRU by deleting oldest entries
     if (this.cache.size >= this.MAX_CACHE_SIZE) {
       const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
+      if (firstKey) {
+        this.cache.delete(firstKey);
+      }
     }
 
     this.cache.set(key, {
@@ -90,18 +92,22 @@ class ChatCache {
     const now = Date.now();
     
     // Clean cache
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.CACHE_TTL) {
+    const cacheKeys = Array.from(this.cache.keys());
+    cacheKeys.forEach(key => {
+      const entry = this.cache.get(key);
+      if (entry && now - entry.timestamp > this.CACHE_TTL) {
         this.cache.delete(key);
       }
-    }
+    });
 
     // Clean rate limits
-    for (const [ip, limit] of this.rateLimits.entries()) {
-      if (now > limit.resetTime) {
+    const rateLimitKeys = Array.from(this.rateLimits.keys());
+    rateLimitKeys.forEach(ip => {
+      const limit = this.rateLimits.get(ip);
+      if (limit && now > limit.resetTime) {
         this.rateLimits.delete(ip);
       }
-    }
+    });
   }
 }
 
