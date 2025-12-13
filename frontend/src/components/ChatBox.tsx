@@ -47,11 +47,22 @@ export default function ChatBox() {
       };
 
       setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending message:', error);
+      
+      let errorContent = 'Sorry, I encountered an error. Please try again.';
+      
+      // Handle rate limiting
+      if (error.response?.status === 429) {
+        const retryAfter = error.response.data?.retryAfter || 60;
+        errorContent = `You're sending messages too quickly. Please wait ${retryAfter} seconds before trying again.`;
+      } else if (error.response?.status === 400) {
+        errorContent = 'Invalid message format. Please try again.';
+      }
+      
       const errorMessage: Message = {
         role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.'
+        content: errorContent
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {

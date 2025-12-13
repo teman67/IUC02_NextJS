@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { chatCache } from '@/lib/chatCache';
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,6 +10,50 @@ export async function POST(request: NextRequest) {
         { error: 'OpenAI API key is not configured' },
         { status: 500 }
       );
+    }
+
+    // Get client IP for rate limiting
+    const ip = request.headers.get('x-forwarded-for') || 
+               request.headers.get('x-real-ip') || 
+               'unknown';
+
+    // Check rate limit
+    const rateLimit = chatCache.checkRateLimit(ip);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { 
+          error: 'Too many requests. Please wait before sending more messages.',
+          retryAfter: rateLimit.retryAfter 
+        },
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': rateLimit.retryAfter?.toString() || '60'
+          }
+        }
+      );
+    }
+
+    // Validate input
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Invalid messages format' },
+        { status: 400 }
+      );
+    }
+
+    // Limit message history to last 10 messages to prevent abuse
+    const limitedMessages = messages.slice(-10);
+
+    // Check cache
+    const cacheKey = chatCache.getCacheKey(limitedMessages);
+    const cachedResponse = chatCache.get(cacheKey);
+    
+    if (cachedResponse) {
+      return NextResponse.json({ 
+        message: cachedResponse,
+        cached: true 
+      });
     }
 
     // System message to provide context about the application
@@ -57,9 +102,10 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        messages: [systemMessage, ...messages],
+        messages: [systemMessage, ...limitedMessages],
         temperature: 0.7,
         max_tokens: 500,
+        user: ip.substring(0, 50), // OpenAI user identifier for abuse monitoring
       }),
     });
 
@@ -74,6 +120,9 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
 
     const data = await response.json();
     const assistantMessage = data.choices[0].message.content;
+
+    // Cache the response
+    chatCache.set(cacheKey, assistantMessage);
 
     return NextResponse.json({ message: assistantMessage });
   } catch (error) {
