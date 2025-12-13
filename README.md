@@ -2,6 +2,8 @@
 
 A full-stack web application for RDF data generation, validation, and SHACL shape constraint checking, focusing on reference material datasets for creep properties of single crystal Ni-based superalloys.
 
+### [Live Show](https://iuc-02-demonstrator.vercel.app/)
+
 ## 🎯 Project Overview
 
 This project develops a framework for **reference material data sets** using creep properties of single crystal Ni-based superalloy as an example. The framework provides:
@@ -28,12 +30,111 @@ IUC02_NextJS/
 └── README.md          # This file
 ```
 
+### Application Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         User Interface                          │
+│                    (Next.js 14 + React 18)                      │
+└────────────┬────────────────────────────────────┬───────────────┘
+             │                                    │
+             │ HTTP/REST API                      │ WebSocket (Future)
+             │                                    │
+┌────────────▼────────────────────────────────────▼───────────────┐
+│                      Frontend Layer                             │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐   │
+│  │  Components │  │  API Routes  │  │   Chat Assistant    │   │
+│  │             │  │              │  │   (OpenAI GPT-4o)   │   │
+│  │  - Navigation│  │ - /api/chat  │  │                     │   │
+│  │  - ChatBox  │  │              │  │  • Rate Limiting    │   │
+│  │  - Workflow │  │              │  │  • Response Cache   │   │
+│  │  - Validation│  │              │  │  • Topic Filtering  │   │
+│  └─────────────┘  └──────────────┘  └─────────────────────┘   │
+└────────────┬────────────────────────────────────────────────────┘
+             │
+             │ Axios HTTP Client
+             │
+┌────────────▼────────────────────────────────────────────────────┐
+│                      Backend Layer                              │
+│                     (FastAPI + Python)                          │
+│  ┌──────────────────┐  ┌──────────────────┐                    │
+│  │   RDF Processor  │  │  File Manager    │                    │
+│  │   (rdflib)       │  │                  │                    │
+│  │                  │  │  • Serve Files   │                    │
+│  │  • Parse Turtle  │  │  • List Files    │                    │
+│  │  • Validate      │  │  • Download      │                    │
+│  │  • JSON-LD       │  │                  │                    │
+│  └──────────────────┘  └──────────────────┘                    │
+│           │                                                     │
+│           │ pyshacl                                             │
+│           │                                                     │
+│  ┌────────▼────────────────────────────────┐                   │
+│  │    SHACL Validation Engine              │                   │
+│  │    (pyshacl 0.25.0)                     │                   │
+│  │                                          │                   │
+│  │  • Constraint Checking                  │                   │
+│  │  • Validation Reports                   │                   │
+│  │  • Conformance Testing                  │                   │
+│  └──────────────────────────────────────────┘                   │
+└────────────┬────────────────────────────────────────────────────┘
+             │
+             │ File System Access
+             │
+┌────────────▼────────────────────────────────────────────────────┐
+│                       Data Layer                                │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐    │
+│  │  RDF Graphs │  │ SHACL Shapes │  │  Metadata Schemas  │    │
+│  │  (.ttl)     │  │  (.ttl)      │  │  (.json)           │    │
+│  └─────────────┘  └──────────────┘  └────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │         Creep Experiment Data (.LIS)                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+
+External Services:
+┌──────────────────────┐
+│   OpenAI API         │
+│   (GPT-4o-mini)      │
+│                      │
+│  • Natural Language  │
+│  • Context-Aware     │
+│  • Rate Limited      │
+└──────────────────────┘
+```
+
+### Data Flow
+
+**Validation Workflow:**
+```
+User Upload → Frontend Validation → Backend API → RDF Parser
+                                                      ↓
+                                              SHACL Validator
+                                                      ↓
+                                         Validation Report (JSON)
+                                                      ↓
+                                         Frontend Display
+```
+
+**Chat Assistant Workflow:**
+```
+User Question → ChatBox Component → Rate Limiter → Cache Check
+                                                         ↓
+                                                    Cache Miss?
+                                                         ↓
+                                                   OpenAI API
+                                                         ↓
+                                              Store in Cache (5 min TTL)
+                                                         ↓
+                                                 Return Response
+```
+
 ## ✨ Features
 
 ### Frontend Features
 - 📊 **Interactive Workflow Visualization** - Visual representation of the data generation and validation workflow
 - 📁 **File Management** - Browse and download example datasets, schemas, and mapping documents
 - ✅ **RDF/SHACL Validation** - Upload or use example RDF data graphs and SHACL shapes for validation
+- 🤖 **AI Chat Assistant** - OpenAI-powered chatbot to help with RDF, SHACL, and workflow questions
 - 🎨 **Modern UI** - Responsive design with Tailwind CSS and smooth animations
 - 📱 **Mobile Friendly** - Fully responsive interface
 
@@ -90,6 +191,11 @@ cd frontend
 # Install dependencies
 npm install
 
+# Configure OpenAI API (for AI chat assistant)
+# Create .env.local file and add your OpenAI API key:
+# OPENAI_API_KEY=your_openai_api_key_here
+# Get your key from: https://platform.openai.com/api-keys
+
 # Run the development server
 npm run dev
 ```
@@ -97,6 +203,20 @@ npm run dev
 The frontend application will be available at `http://localhost:3000`
 
 ## 📖 Usage
+
+### AI Chat Assistant
+
+1. Click the **chat icon** (blue button) in the bottom-right corner
+2. Ask questions about:
+   - RDF data generation and concepts
+   - SHACL validation and shapes
+   - Application workflow and navigation
+   - Schema requirements and metadata
+3. Features:
+   - Context-aware responses about IUC02 framework
+   - Rate limiting (5 messages per 2 minutes)
+   - Response caching for instant repeated answers
+   - Focused on semantic web and materials science topics
 
 ### Data Generation Workflow
 
@@ -139,6 +259,7 @@ Available endpoints:
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS
 - **HTTP Client**: Axios
+- **AI Integration**: OpenAI API (GPT-4o-mini)
 - **UI Components**: Custom React components
 
 ### Backend
@@ -165,13 +286,20 @@ frontend/
 │   │   ├── page.tsx           # Home page
 │   │   ├── about/             # About page
 │   │   ├── data-generation/   # Data generation workflow
-│   │   └── data-validation/   # Validation interface
-│   └── components/            # Reusable React components
-│       ├── Navigation.tsx     # Navigation bar
-│       ├── WorkflowDiagram.tsx
-│       ├── BackgroundLogo.tsx
-│       └── WarningMessage.tsx
+│   │   ├── data-validation/   # Validation interface
+│   │   └── api/
+│   │       └── chat/          # AI chat API route
+│   ├── components/            # Reusable React components
+│   │   ├── Navigation.tsx     # Navigation bar
+│   │   ├── ChatBox.tsx        # AI chat assistant
+│   │   ├── WorkflowDiagram.tsx
+│   │   ├── BackgroundLogo.tsx
+│   │   └── WarningMessage.tsx
+│   └── lib/
+│       └── chatCache.ts       # Caching & rate limiting
 ├── public/                    # Static assets
+├── CHATBOX_SETUP.md          # AI chat setup guide
+├── CHAT_PROTECTION.md        # Protection features docs
 └── package.json              # Dependencies and scripts
 ```
 
@@ -223,9 +351,31 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 Create `.env.local` in the frontend directory:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
+OPENAI_API_KEY=your_openai_api_key_here
 ```
 
+**Note:** 
+- The `OPENAI_API_KEY` is required for the AI chat assistant feature
+- Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+- Keep this file private and never commit it to version control
+
 ## 🧪 Testing
+
+### Testing AI Chat Assistant
+
+1. **Rate Limiting Test**:
+   - Send 6 messages rapidly
+   - 6th message should trigger rate limit error
+   - Wait 2 minutes for reset
+
+2. **Cache Test**:
+   - Ask "What is RDF?" (takes 1-2 seconds)
+   - Ask the exact same question (instant response)
+   - Check browser console for cache indicators
+
+3. **Topic Enforcement Test**:
+   - Ask off-topic question (e.g., "What's the weather?")
+   - Should politely redirect to IUC02 topics
 
 ### Testing RDF Validation
 
