@@ -17,6 +17,24 @@ export async function POST(request: NextRequest) {
                request.headers.get('x-real-ip') || 
                'unknown';
 
+    // Check if user is penalized for off-topic questions
+    const penalty = chatCache.checkPenalty(ip);
+    if (penalty.penalized) {
+      return NextResponse.json(
+        { 
+          error: `You've been temporarily restricted for asking off-topic questions. Please wait ${penalty.retryAfter} seconds and focus on IUC02-related topics (RDF, SHACL, data validation).`,
+          retryAfter: penalty.retryAfter,
+          isPenalty: true
+        },
+        { 
+          status: 403,
+          headers: {
+            'Retry-After': penalty.retryAfter?.toString() || '300'
+          }
+        }
+      );
+    }
+
     // Check rate limit
     const rateLimit = chatCache.checkRateLimit(ip);
     if (!rateLimit.allowed) {
@@ -91,9 +109,18 @@ For greetings (hi, hello, hey, etc.):
 - Invite them to ask about the app
 
 For questions unrelated to RDF, SHACL, data validation, workflows, or semantic web:
-- Acknowledge their question politely
-- Gently redirect to your expertise area
-- Example: "That's interesting, but I'm here to help you with the IUC02 framework - things like generating RDF data or validating with SHACL. What would you like to know about the application?"
+- You MUST respond with EXACTLY this marker at the start: "[OFF_TOPIC]"
+- Then politely redirect to your expertise area
+- Example: "[OFF_TOPIC] That's interesting, but I'm here to help you with the IUC02 framework - things like generating RDF data or validating with SHACL. What would you like to know about the application?"
+
+CRITICAL: Always start your response with "[OFF_TOPIC]" marker for any question not related to:
+- RDF, RDFS, OWL, semantic web technologies
+- SHACL validation and shapes
+- Data generation, validation, or transformation workflows
+- JSON-LD, Turtle, or other RDF serializations
+- The IUC02 application features and usage
+- Materials science data (only in context of RDF/SHACL)
+- Metadata schemas and ontologies
 
 Help users by:
 - Explaining RDF and SHACL concepts in simple terms
@@ -132,7 +159,34 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
     const data = await response.json();
     const assistantMessage = data.choices[0].message.content;
 
-    // Cache the response
+    // Check if the response indicates an off-topic question
+    if (assistantMessage.startsWith('[OFF_TOPIC]')) {
+      console.log('⚠️ Off-topic question detected - tracking strike');
+      
+      // Track the off-topic question
+      const result = chatCache.trackOffTopic(ip);
+      
+      // Remove the marker from the message before sending to user
+      const cleanedMessage = assistantMessage.replace('[OFF_TOPIC]', '').trim();
+      
+      // Build warning message based on strike count
+      let warning = '';
+      if (result.shouldPenalize) {
+        warning = `You've asked ${result.strikeCount} off-topic questions. You are now restricted for 5 minutes. Please focus on IUC02-related topics.`;
+      } else {
+        const remaining = 3 - result.strikeCount;
+        warning = `Off-topic question detected (Strike ${result.strikeCount}/3). ${remaining} more off-topic question(s) will result in a 5-minute restriction.`;
+      }
+      
+      // Don't cache off-topic responses
+      return NextResponse.json({ 
+        message: cleanedMessage,
+        warning: warning,
+        strikeCount: result.strikeCount
+      });
+    }
+
+    // Cache the response (only for on-topic questions)
     console.log('💾 Storing response in cache');
     chatCache.set(cacheKey, assistantMessage);
 
