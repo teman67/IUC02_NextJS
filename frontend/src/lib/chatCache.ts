@@ -10,11 +10,27 @@ interface RateLimitEntry {
   resetTime: number;
 }
 
+// Off-topic penalty storage
+interface PenaltyEntry {
+  penaltyUntil: number;
+}
+
+// Off-topic tracking
+interface OffTopicTracker {
+  count: number;
+  resetTime: number;
+}
+
 class ChatCache {
   private cache = new Map<string, CacheEntry>();
   private rateLimits = new Map<string, RateLimitEntry>();
+  private penalties = new Map<string, PenaltyEntry>();
+  private offTopicTrackers = new Map<string, OffTopicTracker>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_CACHE_SIZE = 100;
+  private readonly PENALTY_DURATION = 5 * 60 * 1000; // 5 minutes penalty
+  private readonly OFF_TOPIC_LIMIT = 3; // 3 strikes before penalty
+  private readonly OFF_TOPIC_WINDOW = 10 * 60 * 1000; // 10 minute tracking window
 
   // Generate cache key from messages
   getCacheKey(messages: any[]): string {
@@ -87,6 +103,65 @@ class ChatCache {
     return { allowed: false, retryAfter };
   }
 
+  // Track off-topic questions and apply penalty after 3 strikes
+  trackOffTopic(ip: string): { shouldPenalize: boolean; strikeCount: number } {
+    const now = Date.now();
+    const tracker = this.offTopicTrackers.get(ip);
+
+    // No tracker or tracking window expired - reset
+    if (!tracker || now > tracker.resetTime) {
+      this.offTopicTrackers.set(ip, {
+        count: 1,
+        resetTime: now + this.OFF_TOPIC_WINDOW
+      });
+      console.log(`⚠️ ${ip}: Off-topic strike 1/${this.OFF_TOPIC_LIMIT}`);
+      return { shouldPenalize: false, strikeCount: 1 };
+    }
+
+    // Increment count
+    tracker.count++;
+    console.log(`⚠️ ${ip}: Off-topic strike ${tracker.count}/${this.OFF_TOPIC_LIMIT}`);
+
+    // Check if reached limit
+    if (tracker.count >= this.OFF_TOPIC_LIMIT) {
+      console.log(`🚫 ${ip}: Reached ${this.OFF_TOPIC_LIMIT} off-topic questions - applying penalty`);
+      this.applyPenalty(ip);
+      // Reset tracker
+      this.offTopicTrackers.delete(ip);
+      return { shouldPenalize: true, strikeCount: tracker.count };
+    }
+
+    return { shouldPenalize: false, strikeCount: tracker.count };
+  }
+
+  // Check if user is penalized for off-topic questions
+  checkPenalty(ip: string): { penalized: boolean; retryAfter?: number } {
+    const penalty = this.penalties.get(ip);
+    const now = Date.now();
+
+    if (!penalty || now > penalty.penaltyUntil) {
+      // No penalty or penalty expired
+      if (penalty) {
+        this.penalties.delete(ip);
+      }
+      return { penalized: false };
+    }
+
+    // User is still penalized
+    const retryAfter = Math.ceil((penalty.penaltyUntil - now) / 1000);
+    console.log(`⛔ ${ip} is penalized for off-topic questions. ${retryAfter}s remaining`);
+    return { penalized: true, retryAfter };
+  }
+
+  // Apply penalty for off-topic questions
+  private applyPenalty(ip: string): void {
+    const now = Date.now();
+    this.penalties.set(ip, {
+      penaltyUntil: now + this.PENALTY_DURATION
+    });
+    console.log(`⚠️ Applied 5-minute penalty to ${ip} for repeated off-topic questions`);
+  }
+
   // Cleanup old entries periodically
   cleanup(): void {
     const now = Date.now();
@@ -106,6 +181,24 @@ class ChatCache {
       const limit = this.rateLimits.get(ip);
       if (limit && now > limit.resetTime) {
         this.rateLimits.delete(ip);
+      }
+    });
+
+    // Clean penalties
+    const penaltyKeys = Array.from(this.penalties.keys());
+    penaltyKeys.forEach(ip => {
+      const penalty = this.penalties.get(ip);
+      if (penalty && now > penalty.penaltyUntil) {
+        this.penalties.delete(ip);
+      }
+    });
+
+    // Clean off-topic trackers
+    const offTopicKeys = Array.from(this.offTopicTrackers.keys());
+    offTopicKeys.forEach(ip => {
+      const tracker = this.offTopicTrackers.get(ip);
+      if (tracker && now > tracker.resetTime) {
+        this.offTopicTrackers.delete(ip);
       }
     });
   }

@@ -53,14 +53,33 @@ export default function ChatBox() {
         console.log('🌐 Response from OpenAI API');
       }
 
+      // Show warning if off-topic with strike count
+      if (response.data.warning) {
+        console.warn('⚠️', response.data.warning);
+        
+        // Add warning as a separate system message
+        const warningMessage: Message = {
+          role: 'assistant',
+          content: `⚠️ WARNING: ${response.data.warning}`
+        };
+        setMessages(prev => [...prev, assistantMessage, warningMessage]);
+        return;
+      }
+
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error: any) {
       console.error('Error sending message:', error);
       
       let errorContent = 'Sorry, I encountered an error. Please try again.';
       
+      // Handle penalty (403 Forbidden)
+      if (error.response?.status === 403 && error.response.data?.isPenalty) {
+        const retryAfter = error.response.data?.retryAfter || 300;
+        const minutes = Math.ceil(retryAfter / 60);
+        errorContent = `🚫 ${error.response.data.error}\n\nYou have ${minutes} minute(s) remaining. Please use this time to review the IUC02 documentation.`;
+      }
       // Handle rate limiting
-      if (error.response?.status === 429) {
+      else if (error.response?.status === 429) {
         const retryAfter = error.response.data?.retryAfter || 60;
         errorContent = `You're sending messages too quickly. Please wait ${retryAfter} seconds before trying again.`;
       } else if (error.response?.status === 400) {
