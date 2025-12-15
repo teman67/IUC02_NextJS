@@ -2,14 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { timestamp, user_agent, page_url, city, country } = await request.json();
+    const { timestamp, user_agent, page_url } = await request.json();
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const ipinfoToken = process.env.IPINFO_API_TOKEN;
 
     if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('your_supabase')) {
       console.log('Supabase not configured - skipping tracking');
       return NextResponse.json({ success: false, message: 'Supabase not configured' });
+    }
+
+    // Get visitor's IP address
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 
+               request.headers.get('x-real-ip') || 
+               'unknown';
+
+    // Fetch geolocation data from ipinfo.io
+    let city = 'Unknown';
+    let country = 'Unknown';
+    
+    if (ipinfoToken && ip !== 'unknown') {
+      try {
+        const geoResponse = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`);
+        if (geoResponse.ok) {
+          const geoData = await geoResponse.json();
+          city = geoData.city || 'Unknown';
+          country = geoData.country || 'Unknown';
+          console.log(`📍 Geolocation: ${city}, ${country} (IP: ${ip})`);
+        }
+      } catch (geoError) {
+        console.log('Could not fetch geolocation:', geoError);
+      }
     }
 
     // Direct REST API call to Supabase (avoiding the JS client)

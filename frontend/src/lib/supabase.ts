@@ -1,21 +1,6 @@
 // Track app visit using API route (avoids client-side Supabase import issues)
 export async function trackAppVisit() {
   try {
-    // Get geolocation data from ipinfo.io API
-    let city = 'Unknown';
-    let country = 'Unknown';
-    
-    try {
-      const geoResponse = await fetch('https://ipinfo.io/json?token=' + process.env.NEXT_PUBLIC_IPINFO_API_TOKEN);
-      if (geoResponse.ok) {
-        const geoData = await geoResponse.json();
-        city = geoData.city || 'Unknown';
-        country = geoData.country || 'Unknown';
-      }
-    } catch (geoError) {
-      console.log('Could not fetch geolocation:', geoError);
-    }
-
     const response = await fetch('/api/track-visit', {
       method: 'POST',
       headers: {
@@ -24,9 +9,7 @@ export async function trackAppVisit() {
       body: JSON.stringify({
         timestamp: new Date().toISOString(),
         user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-        page_url: typeof window !== 'undefined' ? window.location.href : 'unknown',
-        city,
-        country
+        page_url: typeof window !== 'undefined' ? window.location.href : 'unknown'
       })
     });
 
