@@ -13,16 +13,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Supabase not configured' });
     }
 
-    // Get visitor's IP address
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 
+    // Get visitor's IP address - Vercel-specific headers
+    // Vercel provides the real client IP in these headers
+    const ip = request.headers.get('x-vercel-forwarded-for') ||
+               request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
                request.headers.get('x-real-ip') || 
+               request.ip ||
                'unknown';
+
+    console.log(`🌐 Detected IP: ${ip}`);
 
     // Fetch geolocation data from ipinfo.io
     let city = 'Unknown';
     let country = 'Unknown';
     
-    if (ipinfoToken && ip !== 'unknown') {
+    if (ipinfoToken && ip !== 'unknown' && ip !== '::1' && ip !== '127.0.0.1') {
       try {
         const geoResponse = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`);
         if (geoResponse.ok) {
@@ -30,11 +35,15 @@ export async function POST(request: NextRequest) {
           city = geoData.city || 'Unknown';
           country = geoData.country || 'Unknown';
           console.log(`📍 Geolocation: ${city}, ${country} (IP: ${ip})`);
+          console.log(`📊 Full geo data:`, JSON.stringify(geoData, null, 2));
+        } else {
+          console.error(`❌ Geolocation API failed: ${geoResponse.status} ${geoResponse.statusText}`);
         }
       } catch (geoError) {
-        console.log('Could not fetch geolocation:', geoError);
+        console.error('❌ Could not fetch geolocation:', geoError);
       }
-    }
+    } else {
+      console.log(`⚠️ Skipping geolocation: IP=${ip}, Token=${ipinfoToken ? 'present' : 'missing'}`);
 
     // Direct REST API call to Supabase (avoiding the JS client)
     const response = await fetch(`${supabaseUrl}/rest/v1/app_visits`, {
