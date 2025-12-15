@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { timestamp, user_agent, page_url } = await request.json();
+    const { timestamp, user_agent, page_url, city, country } = await request.json();
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -24,7 +24,9 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         timestamp,
         user_agent,
-        page_url
+        page_url,
+        city,
+        country
       })
     });
 
