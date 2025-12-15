@@ -22,28 +22,58 @@ export async function POST(request: NextRequest) {
                'unknown';
 
     console.log(`🌐 Detected IP: ${ip}`);
+    console.log(`🔑 API Token available: ${ipinfoToken ? 'YES' : 'NO'}`);
 
-    // Fetch geolocation data from ipinfo.io
+    // Fetch geolocation data
     let city = 'Unknown';
     let country = 'Unknown';
     
-    if (ipinfoToken && ip !== 'unknown' && ip !== '::1' && ip !== '127.0.0.1') {
+    if (ip !== 'unknown' && ip !== '::1' && ip !== '127.0.0.1') {
       try {
-        const geoResponse = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`);
-        if (geoResponse.ok) {
-          const geoData = await geoResponse.json();
-          city = geoData.city || 'Unknown';
-          country = geoData.country || 'Unknown';
-          console.log(`📍 Geolocation: ${city}, ${country} (IP: ${ip})`);
-          console.log(`📊 Full geo data:`, JSON.stringify(geoData, null, 2));
+        // Try ipinfo.io first if token is available
+        if (ipinfoToken) {
+          const geoResponse = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`, {
+            headers: {
+              'Accept': 'application/json'
+            }
+          });
+          
+          if (geoResponse.ok) {
+            const geoData = await geoResponse.json();
+            city = geoData.city || 'Unknown';
+            country = geoData.country || 'Unknown';
+            console.log(`✅ ipinfo.io: ${city}, ${country}`);
+            console.log(`📊 Full data:`, JSON.stringify(geoData, null, 2));
+          } else {
+            const errorText = await geoResponse.text();
+            console.error(`❌ ipinfo.io failed (${geoResponse.status}):`, errorText);
+            throw new Error('ipinfo.io failed');
+          }
         } else {
-          console.error(`❌ Geolocation API failed: ${geoResponse.status} ${geoResponse.statusText}`);
+          throw new Error('No API token');
         }
-      } catch (geoError) {
-        console.error('❌ Could not fetch geolocation:', geoError);
+      } catch (error) {
+        // Fallback to free ip-api.com service (no auth required)
+        console.log(`⚠️ Trying fallback service (ip-api.com)...`);
+        try {
+          const fallbackResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,city,query`);
+          if (fallbackResponse.ok) {
+            const fallbackData = await fallbackResponse.json();
+            if (fallbackData.status === 'success') {
+              city = fallbackData.city || 'Unknown';
+              country = fallbackData.countryCode || 'Unknown';
+              console.log(`✅ ip-api.com: ${city}, ${country}`);
+              console.log(`📊 Fallback data:`, JSON.stringify(fallbackData, null, 2));
+            } else {
+              console.error(`❌ ip-api.com returned error:`, fallbackData.message);
+            }
+          }
+        } catch (fallbackError) {
+          console.error('❌ Fallback geolocation also failed:', fallbackError);
+        }
       }
     } else {
-      console.log(`⚠️ Skipping geolocation: IP=${ip}, Token=${ipinfoToken ? 'present' : 'missing'}`);
+      console.log(`⚠️ Skipping geolocation: IP=${ip} is localhost or unknown`);
     }
 
     // Direct REST API call to Supabase (avoiding the JS client)
