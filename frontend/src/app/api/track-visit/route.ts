@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
       }
     } else {
       console.log(`⚠️ Skipping geolocation: IP=${ip}, Token=${ipinfoToken ? 'present' : 'missing'}`);
+    }
 
     // Direct REST API call to Supabase (avoiding the JS client)
     const response = await fetch(`${supabaseUrl}/rest/v1/app_visits`, {
