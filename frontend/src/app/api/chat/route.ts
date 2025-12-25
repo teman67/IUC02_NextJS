@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { chatCache } from '@/lib/chatCache';
+import { NextRequest, NextResponse } from "next/server";
+import { chatCache } from "@/lib/chatCache";
 
 export async function POST(request: NextRequest) {
   try {
@@ -7,30 +7,31 @@ export async function POST(request: NextRequest) {
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
-        { error: 'OpenAI API key is not configured' },
+        { error: "OpenAI API key is not configured" },
         { status: 500 }
       );
     }
 
     // Get client IP for rate limiting
-    const ip = request.headers.get('x-forwarded-for') || 
-               request.headers.get('x-real-ip') || 
-               'unknown';
+    const ip =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown";
 
     // Check if user is penalized for off-topic questions
     const penalty = chatCache.checkPenalty(ip);
     if (penalty.penalized) {
       return NextResponse.json(
-        { 
+        {
           error: `You've been temporarily restricted for asking off-topic questions. Please wait ${penalty.retryAfter} seconds and focus on IUC02-related topics (RDF, SHACL, data validation).`,
           retryAfter: penalty.retryAfter,
-          isPenalty: true
+          isPenalty: true,
         },
-        { 
+        {
           status: 403,
           headers: {
-            'Retry-After': penalty.retryAfter?.toString() || '300'
-          }
+            "Retry-After": penalty.retryAfter?.toString() || "300",
+          },
         }
       );
     }
@@ -39,15 +40,15 @@ export async function POST(request: NextRequest) {
     const rateLimit = chatCache.checkRateLimit(ip);
     if (!rateLimit.allowed) {
       return NextResponse.json(
-        { 
-          error: 'Too many requests. Please wait before sending more messages.',
-          retryAfter: rateLimit.retryAfter 
+        {
+          error: "Too many requests. Please wait before sending more messages.",
+          retryAfter: rateLimit.retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
-            'Retry-After': rateLimit.retryAfter?.toString() || '60'
-          }
+            "Retry-After": rateLimit.retryAfter?.toString() || "60",
+          },
         }
       );
     }
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
     // Validate input
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
-        { error: 'Invalid messages format' },
+        { error: "Invalid messages format" },
         { status: 400 }
       );
     }
@@ -65,29 +66,29 @@ export async function POST(request: NextRequest) {
 
     // Get the last user message for caching (ignore conversation history)
     const lastUserMessage = limitedMessages[limitedMessages.length - 1];
-    
+
     // Check cache - cache based on user's question only
     const cacheKey = chatCache.getCacheKey([lastUserMessage]);
     const cachedResponse = chatCache.get(cacheKey);
-    
-    console.log('🔍 Cache check:', {
+
+    console.log("🔍 Cache check:", {
       userQuestion: lastUserMessage.content.substring(0, 50),
-      cacheHit: !!cachedResponse
+      cacheHit: !!cachedResponse,
     });
-    
+
     if (cachedResponse) {
-      console.log('✅ CACHE HIT - Returning cached response');
-      return NextResponse.json({ 
+      console.log("✅ CACHE HIT - Returning cached response");
+      return NextResponse.json({
         message: cachedResponse,
-        cached: true 
+        cached: true,
       });
     }
-    
-    console.log('❌ CACHE MISS - Calling OpenAI API');
+
+    console.log("❌ CACHE MISS - Calling OpenAI API");
 
     // System message to provide context about the application
     const systemMessage = {
-      role: 'system',
+      role: "system",
       content: `You are an AI assistant for the IUC02 framework application. This framework is designed for curation and distribution of reference datasets, specifically focusing on creep properties of single crystal Ni-based superalloys.
 
 The application has the following main features:
@@ -132,17 +133,17 @@ Help users by:
 - Explaining schema requirements
 - Helping navigate the application features
 
-Be concise, helpful, and technical when needed but explain complex semantic web concepts clearly. Always stay focused on IUC02-related topics.`
+Be concise, helpful, and technical when needed but explain complex semantic web concepts clearly. Always stay focused on IUC02-related topics.`,
     };
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: "gpt-4o-mini",
         messages: [systemMessage, ...limitedMessages],
         temperature: 0.7,
         max_tokens: 500,
@@ -152,9 +153,9 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('OpenAI API error:', errorData);
+      console.error("OpenAI API error:", errorData);
       return NextResponse.json(
-        { error: 'Failed to get response from OpenAI' },
+        { error: "Failed to get response from OpenAI" },
         { status: response.status }
       );
     }
@@ -163,41 +164,41 @@ Be concise, helpful, and technical when needed but explain complex semantic web 
     const assistantMessage = data.choices[0].message.content;
 
     // Check if the response indicates an off-topic question
-    if (assistantMessage.startsWith('[OFF_TOPIC]')) {
-      console.log('⚠️ Off-topic question detected - tracking strike');
-      
+    if (assistantMessage.startsWith("[OFF_TOPIC]")) {
+      console.log("⚠️ Off-topic question detected - tracking strike");
+
       // Track the off-topic question
       const result = chatCache.trackOffTopic(ip);
-      
+
       // Remove the marker from the message before sending to user
-      const cleanedMessage = assistantMessage.replace('[OFF_TOPIC]', '').trim();
-      
+      const cleanedMessage = assistantMessage.replace("[OFF_TOPIC]", "").trim();
+
       // Build warning message based on strike count
-      let warning = '';
+      let warning = "";
       if (result.shouldPenalize) {
         warning = `You've asked ${result.strikeCount} off-topic questions. You are now restricted for 5 minutes. Please focus on IUC02-related topics.`;
       } else {
         const remaining = 3 - result.strikeCount;
         warning = `Off-topic question detected (Strike ${result.strikeCount}/3). ${remaining} more off-topic question(s) will result in a 5-minute restriction.`;
       }
-      
+
       // Don't cache off-topic responses
-      return NextResponse.json({ 
+      return NextResponse.json({
         message: cleanedMessage,
         warning: warning,
-        strikeCount: result.strikeCount
+        strikeCount: result.strikeCount,
       });
     }
 
     // Cache the response (only for on-topic questions)
-    console.log('💾 Storing response in cache');
+    console.log("💾 Storing response in cache");
     chatCache.set(cacheKey, assistantMessage);
 
     return NextResponse.json({ message: assistantMessage });
   } catch (error) {
-    console.error('Error in chat API:', error);
+    console.error("Error in chat API:", error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }

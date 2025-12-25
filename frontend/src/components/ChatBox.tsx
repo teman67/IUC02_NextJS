@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
+import { useState, useRef, useEffect } from "react";
+import axios from "axios";
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
@@ -12,16 +12,17 @@ export default function ChatBox() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
-      role: 'assistant',
-      content: 'Hello! I\'m here to help you with RDF data generation, SHACL validation, and navigating the IUC02 framework. How can I assist you today?'
-    }
+      role: "assistant",
+      content:
+        "Hello! I'm here to help you with RDF data generation, SHACL validation, and navigating the IUC02 framework. How can I assist you today?",
+    },
   ]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   useEffect(() => {
@@ -31,47 +32,47 @@ export default function ChatBox() {
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
-    const userMessage: Message = { role: 'user', content: input };
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
+    const userMessage: Message = { role: "user", content: input };
+    setMessages((prev) => [...prev, userMessage]);
+    setInput("");
     setIsLoading(true);
 
     try {
-      const response = await axios.post('/api/chat', {
-        messages: [...messages, userMessage]
+      const response = await axios.post("/api/chat", {
+        messages: [...messages, userMessage],
       });
 
       const assistantMessage: Message = {
-        role: 'assistant',
-        content: response.data.message
+        role: "assistant",
+        content: response.data.message,
       };
 
       // Log if response was cached
       if (response.data.cached) {
-        console.log('⚡ Response retrieved from cache (instant)');
+        console.log("⚡ Response retrieved from cache (instant)");
       } else {
-        console.log('🌐 Response from OpenAI API');
+        console.log("🌐 Response from OpenAI API");
       }
 
       // Show warning if off-topic with strike count
       if (response.data.warning) {
-        console.warn('⚠️', response.data.warning);
-        
+        console.warn("⚠️", response.data.warning);
+
         // Add warning as a separate system message
         const warningMessage: Message = {
-          role: 'assistant',
-          content: `⚠️ WARNING: ${response.data.warning}`
+          role: "assistant",
+          content: `⚠️ WARNING: ${response.data.warning}`,
         };
-        setMessages(prev => [...prev, assistantMessage, warningMessage]);
+        setMessages((prev) => [...prev, assistantMessage, warningMessage]);
         return;
       }
 
-      setMessages(prev => [...prev, assistantMessage]);
+      setMessages((prev) => [...prev, assistantMessage]);
     } catch (error: any) {
-      console.error('Error sending message:', error);
-      
-      let errorContent = 'Sorry, I encountered an error. Please try again.';
-      
+      console.error("Error sending message:", error);
+
+      let errorContent = "Sorry, I encountered an error. Please try again.";
+
       // Handle penalty (403 Forbidden)
       if (error.response?.status === 403 && error.response.data?.isPenalty) {
         const retryAfter = error.response.data?.retryAfter || 300;
@@ -83,21 +84,21 @@ export default function ChatBox() {
         const retryAfter = error.response.data?.retryAfter || 60;
         errorContent = `You're sending messages too quickly. Please wait ${retryAfter} seconds before trying again.`;
       } else if (error.response?.status === 400) {
-        errorContent = 'Invalid message format. Please try again.';
+        errorContent = "Invalid message format. Please try again.";
       }
-      
+
       const errorMessage: Message = {
-        role: 'assistant',
-        content: errorContent
+        role: "assistant",
+        content: errorContent,
       };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
@@ -108,54 +109,88 @@ export default function ChatBox() {
       {/* Chat Toggle Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="fixed bottom-6 right-6 z-50 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-4 shadow-lg transition-all duration-300 hover:scale-110"
+        className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-3 sm:p-4 shadow-lg transition-all duration-300 hover:scale-110"
         aria-label="Toggle chat"
       >
         {isOpen ? (
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          <svg
+            className="w-5 h-5 sm:w-6 sm:h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         ) : (
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+          <svg
+            className="w-5 h-5 sm:w-6 sm:h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+            />
           </svg>
         )}
       </button>
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-24 right-6 z-50 w-96 h-[600px] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
+        <div className="fixed bottom-20 right-4 sm:bottom-20 sm:right-6 z-50 w-[calc(100vw-2rem)] sm:w-80 h-[calc(100vh-10rem)] sm:h-[500px] max-h-[calc(100vh-10rem)] sm:max-h-[500px] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
           {/* Header */}
-          <div className="bg-blue-600 text-white px-6 py-4 rounded-t-lg">
-            <h3 className="font-semibold text-lg">IUC02 AI Assistant</h3>
-            <p className="text-sm text-blue-100">Ask me about RDF, SHACL, or workflow</p>
+          <div className="bg-blue-600 text-white px-3 sm:px-4 py-2 sm:py-3 rounded-t-lg shrink-0 flex-none">
+            <h3 className="font-semibold text-sm sm:text-base">
+              IUC02 AI Assistant
+            </h3>
+            <p className="text-xs text-blue-100 mt-0.5">
+              Ask me about RDF, SHACL, or workflow
+            </p>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
             {messages.map((message, index) => (
               <div
                 key={index}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${
+                  message.role === "user" ? "justify-end" : "justify-start"
+                }`}
               >
                 <div
-                  className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                    message.role === 'user'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-800'
+                  className={`max-w-[85%] sm:max-w-[80%] rounded-lg px-3 sm:px-4 py-2 ${
+                    message.role === "user"
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-100 text-gray-800"
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  <p className="text-xs sm:text-sm whitespace-pre-wrap">
+                    {message.content}
+                  </p>
                 </div>
               </div>
             ))}
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-gray-100 text-gray-800 rounded-lg px-4 py-2">
+                <div className="bg-gray-100 text-gray-800 rounded-lg px-3 sm:px-4 py-2">
                   <div className="flex space-x-2">
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    <div
+                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.1s" }}
+                    ></div>
+                    <div
+                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.2s" }}
+                    ></div>
                   </div>
                 </div>
               </div>
@@ -164,7 +199,7 @@ export default function ChatBox() {
           </div>
 
           {/* Input */}
-          <div className="border-t border-gray-200 p-4">
+          <div className="border-t border-gray-200 p-3 sm:p-4">
             <div className="flex space-x-2">
               <input
                 type="text"
@@ -172,16 +207,26 @@ export default function ChatBox() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Type your message..."
-                className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+                className="flex-1 border border-gray-300 rounded-lg px-3 sm:px-4 py-2 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
                 disabled={isLoading}
               />
               <button
                 onClick={sendMessage}
                 disabled={isLoading || !input.trim()}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                <svg
+                  className="w-4 h-4 sm:w-5 sm:h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                  />
                 </svg>
               </button>
             </div>
