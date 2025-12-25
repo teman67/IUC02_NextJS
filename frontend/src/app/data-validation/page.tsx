@@ -14,12 +14,15 @@ export default function DataValidationPage() {
   const [shaclOption, setShaclOption] = useState<'upload' | 'example'>('upload')
 
   const loadExampleFile = async (filename: string, setter: (content: string) => void) => {
+    setLoading(true)
     try {
       const response = await axios.get(`${API_URL}/api/files/${filename}`)
       setter(response.data.content)
     } catch (error) {
       console.error('Error loading example file:', error)
       alert('Failed to load example file')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -97,6 +100,7 @@ export default function DataValidationPage() {
                   checked={rdfOption === 'upload'}
                   onChange={() => setRdfOption('upload')}
                   className="w-5 h-5 cursor-pointer"
+                  disabled={loading}
                 />
                 <span className="text-lg">Upload Your Own</span>
               </label>
@@ -110,9 +114,16 @@ export default function DataValidationPage() {
                     loadExampleFile('rdfGraph_smallExample.ttl', setRdfContent)
                   }}
                   className="w-5 h-5 cursor-pointer"
+                  disabled={loading}
                 />
                 <span className="text-lg">Use Example Data Graph</span>
               </label>
+              {loading && rdfOption === 'example' && (
+                <div className="flex items-center gap-2 text-white bg-white/20 p-2 rounded">
+                  <span className="animate-spin text-xl">⏳</span>
+                  <span className="font-semibold">Loading example file...</span>
+                </div>
+              )}
             </div>
 
             {rdfOption === 'upload' && (
@@ -168,6 +179,7 @@ export default function DataValidationPage() {
                   checked={shaclOption === 'upload'}
                   onChange={() => setShaclOption('upload')}
                   className="w-5 h-5 cursor-pointer"
+                  disabled={loading}
                 />
                 <span className="text-lg">Upload Your Own</span>
               </label>
@@ -181,9 +193,16 @@ export default function DataValidationPage() {
                     loadExampleFile('shaclShape_smallExample.ttl', setShaclContent)
                   }}
                   className="w-5 h-5 cursor-pointer"
+                  disabled={loading}
                 />
                 <span className="text-lg">Use Example Shape Graph</span>
               </label>
+              {loading && shaclOption === 'example' && (
+                <div className="flex items-center gap-2 text-white bg-white/20 p-2 rounded">
+                  <span className="animate-spin text-xl">⏳</span>
+                  <span className="font-semibold">Loading example file...</span>
+                </div>
+              )}
             </div>
 
             {shaclOption === 'upload' && (

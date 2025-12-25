@@ -9,6 +9,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export default function DataGenerationPage() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [fileContent, setFileContent] = useState('')
+  const [loading, setLoading] = useState(false)
 
   const fileOptions: Record<string, string> = {
     'Vh5205_C-95.LIS': 'Creep Experiment Input File',
@@ -20,6 +21,7 @@ export default function DataGenerationPage() {
   }
 
   const loadFile = async (filename: string) => {
+    setLoading(true)
     try {
       const response = await axios.get(`${API_URL}/api/files/${filename}`)
       setFileContent(response.data.content)
@@ -27,6 +29,8 @@ export default function DataGenerationPage() {
     } catch (error) {
       console.error('Error loading file:', error)
       alert('Failed to load file')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -165,6 +169,7 @@ export default function DataGenerationPage() {
             onChange={(e) => loadFile(e.target.value)}
             className="input-field"
             defaultValue=""
+            disabled={loading}
           >
             <option value="" disabled>Select a file...</option>
             {Object.entries(fileOptions).map(([filename, label]) => (
@@ -173,6 +178,12 @@ export default function DataGenerationPage() {
               </option>
             ))}
           </select>
+          {loading && (
+            <div className="mt-3 flex items-center gap-2 text-primary-600">
+              <span className="animate-spin text-xl">⏳</span>
+              <span className="font-semibold">Loading file...</span>
+            </div>
+          )}
         </div>
 
         {selectedFile && fileContent && (
