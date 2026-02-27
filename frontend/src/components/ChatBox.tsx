@@ -23,7 +23,21 @@ export default function ChatBox() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [chatSize, setChatSize] = useState({ width: 600, height: 650 });
+  const [isResizing, setIsResizing] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
+
+  // Check for mobile on mount and resize
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -32,6 +46,39 @@ export default function ChatBox() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing || !chatRef.current) return;
+
+      const rect = chatRef.current.getBoundingClientRect();
+      const newWidth = window.innerWidth - e.clientX;
+      const newHeight = window.innerHeight - e.clientY;
+
+      setChatSize({
+        width: Math.max(350, Math.min(newWidth, window.innerWidth - 32)),
+        height: Math.max(400, Math.min(newHeight, window.innerHeight - 32)),
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "nwse-resize";
+      document.body.style.userSelect = "none";
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [isResizing]);
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -149,7 +196,30 @@ export default function ChatBox() {
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 top-4 sm:top-auto z-50 w-[calc(100vw-2rem)] sm:w-[450px] md:w-[600px] sm:h-[550px] md:h-[650px] sm:max-h-[calc(100vh-7rem)] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
+        <div
+          ref={chatRef}
+          className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200"
+          style={{
+            width: isMobile ? 'calc(100vw - 2rem)' : `${chatSize.width}px`,
+            height: isMobile ? 'calc(100vh - 2rem)' : `${chatSize.height}px`,
+            maxHeight: 'calc(100vh - 2rem)',
+          }}
+        >
+          {/* Resize Handle */}
+          <div
+            className="absolute top-0 left-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-500 hover:bg-opacity-20 transition-colors rounded-tl-lg hidden sm:block"
+            onMouseDown={() => setIsResizing(true)}
+            title="Drag to resize"
+          >
+            <svg
+              className="w-3 h-3 text-gray-400 absolute top-0.5 left-0.5"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+            >
+              <path d="M0 0h2v2H0V0zm0 4h2v2H0V4zm4-4h2v2H4V0zm0 4h2v2H4V4z" />
+            </svg>
+          </div>
+
           {/* Header */}
           <div className="bg-blue-600 text-white px-3 sm:px-4 py-2 sm:py-3 rounded-t-lg shrink-0 flex-none">
             <div className="flex items-start justify-between">
@@ -193,18 +263,18 @@ export default function ChatBox() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] sm:max-w-[80%] rounded-lg px-3 sm:px-4 py-2 sm:py-3 ${
+                  className={`max-w-[95%] rounded-lg px-3 sm:px-4 py-2 sm:py-3 break-words overflow-hidden ${
                     message.role === "user"
                       ? "bg-blue-600 text-white"
                       : "bg-gray-100 text-gray-800"
                   }`}
                 >
                   {message.role === "user" ? (
-                    <p className="text-xs sm:text-sm whitespace-pre-wrap">
+                    <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">
                       {message.content}
                     </p>
                   ) : (
-                    <div className="text-xs sm:text-sm prose prose-sm max-w-none prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-code:text-xs prose-pre:my-2">
+                    <div className="text-xs sm:text-sm prose prose-sm max-w-none prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-code:text-xs prose-pre:my-2 prose-pre:overflow-x-auto">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -215,13 +285,14 @@ export default function ChatBox() {
                                 style={vscDarkPlus}
                                 language={match[1]}
                                 PreTag="div"
-                                className="rounded-md text-xs"
+                                className="rounded-md text-xs overflow-x-auto"
+                                wrapLongLines={false}
                                 {...props}
                               >
                                 {String(children).replace(/\n$/, "")}
                               </SyntaxHighlighter>
                             ) : (
-                              <code className="bg-gray-200 text-gray-800 px-1 py-0.5 rounded text-xs" {...props}>
+                              <code className="bg-gray-200 text-gray-800 px-1 py-0.5 rounded text-xs break-all" {...props}>
                                 {children}
                               </code>
                             );
@@ -236,19 +307,19 @@ export default function ChatBox() {
                             <li className="ml-2">{children}</li>
                           ),
                           p: ({ children }) => (
-                            <p className="my-2 leading-relaxed">{children}</p>
+                            <p className="my-2 leading-relaxed break-words">{children}</p>
                           ),
                           h1: ({ children }) => (
-                            <h1 className="text-base font-bold mt-3 mb-2">{children}</h1>
+                            <h1 className="text-base font-bold mt-3 mb-2 break-words">{children}</h1>
                           ),
                           h2: ({ children }) => (
-                            <h2 className="text-sm font-bold mt-3 mb-2">{children}</h2>
+                            <h2 className="text-sm font-bold mt-3 mb-2 break-words">{children}</h2>
                           ),
                           h3: ({ children }) => (
-                            <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>
+                            <h3 className="text-sm font-semibold mt-2 mb-1 break-words">{children}</h3>
                           ),
                           a: ({ children, href }) => (
-                            <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
+                            <a href={href} className="text-blue-600 hover:underline break-all" target="_blank" rel="noopener noreferrer">{children}</a>
                           ),
                           blockquote: ({ children }) => (
                             <blockquote className="border-l-4 border-gray-300 pl-3 my-2 italic">{children}</blockquote>
