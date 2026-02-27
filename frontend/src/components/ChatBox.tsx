@@ -152,12 +152,35 @@ export default function ChatBox() {
         <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 top-4 sm:top-auto z-50 w-[calc(100vw-2rem)] sm:w-[450px] md:w-[600px] sm:h-[550px] md:h-[650px] sm:max-h-[calc(100vh-7rem)] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
           {/* Header */}
           <div className="bg-blue-600 text-white px-3 sm:px-4 py-2 sm:py-3 rounded-t-lg shrink-0 flex-none">
-            <h3 className="font-semibold text-sm sm:text-base">
-              IUC02 AI Assistant
-            </h3>
-            <p className="text-xs text-blue-100 mt-0.5">
-              Ask me about RDF, SHACL, or workflow
-            </p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-sm sm:text-base">
+                  IUC02 AI Assistant
+                </h3>
+                <p className="text-xs text-blue-100 mt-0.5">
+                  Ask me about RDF, SHACL, or workflow
+                </p>
+              </div>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="text-white hover:text-blue-200 transition-colors ml-2"
+                aria-label="Close chat"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
