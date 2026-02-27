@@ -2,6 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import axios from "axios";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface Message {
   role: "user" | "assistant";
@@ -145,7 +149,7 @@ export default function ChatBox() {
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-20 right-4 sm:bottom-20 sm:right-6 z-50 w-[calc(100vw-2rem)] sm:w-80 h-[calc(100vh-10rem)] sm:h-[500px] max-h-[calc(100vh-10rem)] sm:max-h-[500px] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
+        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 top-4 sm:top-auto z-50 w-[calc(100vw-2rem)] sm:w-[450px] md:w-[600px] sm:h-[550px] md:h-[650px] sm:max-h-[calc(100vh-7rem)] bg-white rounded-lg shadow-2xl flex flex-col border border-gray-200">
           {/* Header */}
           <div className="bg-blue-600 text-white px-3 sm:px-4 py-2 sm:py-3 rounded-t-lg shrink-0 flex-none">
             <h3 className="font-semibold text-sm sm:text-base">
@@ -166,15 +170,72 @@ export default function ChatBox() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] sm:max-w-[80%] rounded-lg px-3 sm:px-4 py-2 ${
+                  className={`max-w-[85%] sm:max-w-[80%] rounded-lg px-3 sm:px-4 py-2 sm:py-3 ${
                     message.role === "user"
                       ? "bg-blue-600 text-white"
                       : "bg-gray-100 text-gray-800"
                   }`}
                 >
-                  <p className="text-xs sm:text-sm whitespace-pre-wrap">
-                    {message.content}
-                  </p>
+                  {message.role === "user" ? (
+                    <p className="text-xs sm:text-sm whitespace-pre-wrap">
+                      {message.content}
+                    </p>
+                  ) : (
+                    <div className="text-xs sm:text-sm prose prose-sm max-w-none prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-code:text-xs prose-pre:my-2">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({ node, inline, className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || "");
+                            return !inline && match ? (
+                              <SyntaxHighlighter
+                                style={vscDarkPlus}
+                                language={match[1]}
+                                PreTag="div"
+                                className="rounded-md text-xs"
+                                {...props}
+                              >
+                                {String(children).replace(/\n$/, "")}
+                              </SyntaxHighlighter>
+                            ) : (
+                              <code className="bg-gray-200 text-gray-800 px-1 py-0.5 rounded text-xs" {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                          ul: ({ children }) => (
+                            <ul className="list-disc list-inside space-y-1 my-2">{children}</ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol className="list-decimal list-inside space-y-1 my-2">{children}</ol>
+                          ),
+                          li: ({ children }) => (
+                            <li className="ml-2">{children}</li>
+                          ),
+                          p: ({ children }) => (
+                            <p className="my-2 leading-relaxed">{children}</p>
+                          ),
+                          h1: ({ children }) => (
+                            <h1 className="text-base font-bold mt-3 mb-2">{children}</h1>
+                          ),
+                          h2: ({ children }) => (
+                            <h2 className="text-sm font-bold mt-3 mb-2">{children}</h2>
+                          ),
+                          h3: ({ children }) => (
+                            <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>
+                          ),
+                          a: ({ children, href }) => (
+                            <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
+                          ),
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-4 border-gray-300 pl-3 my-2 italic">{children}</blockquote>
+                          ),
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
