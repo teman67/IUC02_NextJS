@@ -18,7 +18,6 @@ export async function POST(request: NextRequest) {
     const ip = request.headers.get('x-vercel-forwarded-for') ||
                request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
                request.headers.get('x-real-ip') || 
-               request.ip ||
                'unknown';
 
     console.log(`🌐 Detected IP: ${ip}`);
