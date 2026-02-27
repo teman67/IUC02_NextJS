@@ -136,6 +136,54 @@
     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
     animation: shimmer 3s linear infinite;
   }
+
+  /* Chatbox markdown styles */
+  .chat-message {
+    @apply prose prose-sm max-w-none;
+  }
+
+  .chat-message pre {
+    @apply bg-gray-900 rounded-md my-2 shadow-sm;
+  }
+
+  .chat-message code {
+    @apply text-xs;
+  }
+
+  .chat-message ul,
+  .chat-message ol {
+    @apply my-2 space-y-1;
+  }
+
+  .chat-message li {
+    @apply leading-relaxed;
+  }
+
+  .chat-message p {
+    @apply my-2 leading-relaxed;
+  }
+
+  .chat-message h1,
+  .chat-message h2,
+  .chat-message h3 {
+    @apply font-bold;
+  }
+
+  .chat-message a {
+    @apply text-blue-600 hover:underline;
+  }
+
+  .chat-message blockquote {
+    @apply border-l-4 border-gray-300 pl-3 italic;
+  }
+
+  .chat-message strong {
+    @apply font-semibold;
+  }
+
+  .chat-message em {
+    @apply italic;
+  }
 }
 
 @layer utilities {
