@@ -8,6 +8,11 @@ from rdflib import Graph
 import os
 import tempfile
 from pathlib import Path
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(
     title="IUC02 Validation API",
@@ -38,6 +43,12 @@ class ValidationRequest(BaseModel):
     
 class FileContent(BaseModel):
     content: str
+
+class ValidationAnalysisRequest(BaseModel):
+    validation_report: str
+    rdf_content: str
+    shacl_content: str
+    conforms: bool
 
 @app.get("/")
 async def root():
@@ -189,6 +200,86 @@ async def parse_rdf(file: UploadFile = File(...)):
             "valid": False,
             "message": f"RDF parsing error: {str(e)}"
         }
+
+@app.post("/api/analyze-validation")
+async def analyze_validation(request: ValidationAnalysisRequest):
+    """
+    Analyze validation failures using OpenAI GPT-4o mini
+    """
+    try:
+        # Get OpenAI API key from environment
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500, 
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+            )
+        
+        # Initialize OpenAI client
+        client = OpenAI(api_key=api_key)
+        
+        # Construct the analysis prompt
+        prompt = f"""You are an expert in RDF/SHACL validation and semantic data analysis. 
+
+A user has performed SHACL validation on their RDF data graph, and the validation {'passed' if request.conforms else 'FAILED'}.
+
+{'Since validation failed, please analyze the validation report and help the user understand what went wrong and how to fix it.' if not request.conforms else 'Please provide a summary of what was validated successfully.'}
+
+**Validation Report:**
+```
+{request.validation_report}
+```
+
+**Data Graph (RDF - Turtle format):**
+```turtle
+{request.rdf_content[:2000]}{'...(truncated)' if len(request.rdf_content) > 2000 else ''}
+```
+
+**Shape Graph (SHACL - Turtle format):**
+```turtle
+{request.shacl_content[:2000]}{'...(truncated)' if len(request.shacl_content) > 2000 else ''}
+```
+
+Please provide:
+1. **Summary**: A brief, non-technical explanation of what happened
+2. **Issues Found**: List specific violations in plain language (if any)
+3. **Root Causes**: Explain why these violations occurred
+4. **Recommendations**: Concrete steps to fix each issue
+5. **Example Fix**: Show a code snippet example of how to correct one of the main issues (if applicable)
+
+Format your response in clear markdown with headers and bullet points for easy reading."""
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful expert in RDF, SHACL validation, and semantic web technologies. Explain technical concepts in a way that's accessible to users with varying levels of expertise."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        analysis = response.choices[0].message.content
+        
+        return {
+            "success": True,
+            "analysis": analysis,
+            "model": "gpt-4o-mini",
+            "timestamp": response.created
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Analysis error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

@@ -5,3 +5,4 @@ pyshacl==0.25.0
 rdflib==7.0.0
 pydantic==2.6.0
 python-dotenv==1.0.0
+openai==1.12.0
