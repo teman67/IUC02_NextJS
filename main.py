@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
+import httpx
 
 # Load environment variables
 load_dotenv()
@@ -215,8 +216,12 @@ async def analyze_validation(request: ValidationAnalysisRequest):
                 detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             )
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client with timeout and retry settings
+        client = OpenAI(
+            api_key=api_key,
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            max_retries=2
+        )
         
         # Construct the analysis prompt
         prompt = f"""You are an expert in RDF/SHACL validation and semantic data analysis. 
