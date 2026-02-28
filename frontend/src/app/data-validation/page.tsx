@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import axios from "axios";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -14,6 +16,8 @@ export default function DataValidationPage() {
   const [shaclOption, setShaclOption] = useState<"upload" | "example">(
     "upload"
   );
+  const [aiAnalysis, setAiAnalysis] = useState<any>(null);
+  const [analyzingWithAI, setAnalyzingWithAI] = useState(false);
 
   const loadExampleFile = async (
     filename: string,
@@ -38,6 +42,7 @@ export default function DataValidationPage() {
     }
 
     setLoading(true);
+    setAiAnalysis(null); // Reset AI analysis when revalidating
     try {
       const response = await axios.post(`${API_URL}/api/validate`, {
         rdf_content: rdfContent,
@@ -50,6 +55,30 @@ export default function DataValidationPage() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAnalyzeWithAI = async () => {
+    if (!validationResult) {
+      alert("No validation result to analyze");
+      return;
+    }
+
+    setAnalyzingWithAI(true);
+    try {
+      const response = await axios.post(`${API_URL}/api/analyze-validation`, {
+        validation_report: validationResult.report_text,
+        rdf_content: rdfContent,
+        shacl_content: shaclContent,
+        conforms: validationResult.conforms,
+      });
+      setAiAnalysis(response.data);
+    } catch (error: any) {
+      alert(
+        `AI Analysis failed: ${error.response?.data?.detail || error.message}`
+      );
+    } finally {
+      setAnalyzingWithAI(false);
     }
   };
 
@@ -341,7 +370,65 @@ export default function DataValidationPage() {
               readOnly
               className="w-full h-64 p-3 border-2 border-gray-300 rounded-lg font-mono text-sm bg-gray-50"
             />
+            
+            {/* AI Analysis Button */}
+            <div className="mt-4">
+              <button
+                onClick={handleAnalyzeWithAI}
+                disabled={analyzingWithAI}
+                className="btn-primary bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700"
+              >
+                {analyzingWithAI ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="animate-spin">🤖</span> Analyzing with AI...
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    <span>🤖</span> Analyze {validationResult.conforms ? 'Results' : 'Failures'} with AI
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
+
+          {/* AI Analysis Result */}
+          {aiAnalysis && (
+            <div className="card bg-gradient-to-br from-purple-50 to-indigo-50 border-2 border-purple-400 animate-slide-up">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-4xl">🤖</span>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">AI Analysis</h3>
+                  <p className="text-sm text-gray-600">Powered by {aiAnalysis.model}</p>
+                </div>
+              </div>
+              <div className="prose prose-blue max-w-none text-gray-800 bg-white p-6 rounded-lg shadow-inner">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ node, ...props }) => <h1 className="text-2xl font-bold mt-6 mb-3 text-gray-900" {...props} />,
+                    h2: ({ node, ...props }) => <h2 className="text-xl font-bold mt-5 mb-2 text-gray-900" {...props} />,
+                    h3: ({ node, ...props }) => <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-900" {...props} />,
+                    p: ({ node, ...props }) => <p className="mb-3 leading-relaxed text-gray-900" {...props} />,
+                    ul: ({ node, ...props }) => <ul className="list-disc list-inside mb-3 space-y-1 ml-2" {...props} />,
+                    ol: ({ node, ...props }) => <ol className="list-decimal list-inside mb-3 space-y-1 ml-2" {...props} />,
+                    li: ({ node, ...props }) => <li className="text-gray-900 ml-2" {...props} />,
+                    code: ({ node, inline, ...props }: any) => 
+                      inline ? (
+                        <code className="bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded text-sm font-mono font-semibold" {...props} />
+                      ) : (
+                        <code className="block bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm font-mono border-2 border-gray-700" {...props} />
+                      ),
+                    pre: ({ node, ...props }) => <pre className="bg-gray-900 p-0 rounded-lg overflow-x-auto mb-4 border-2 border-gray-700" {...props} />,
+                    strong: ({ node, ...props }) => <strong className="font-bold text-gray-900" {...props} />,
+                    em: ({ node, ...props }) => <em className="italic text-gray-900" {...props} />,
+                    blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-purple-400 pl-4 italic my-3 text-gray-800 bg-purple-50 py-2 rounded-r" {...props} />,
+                  }}
+                >
+                  {aiAnalysis.analysis}
+                </ReactMarkdown>
+              </div>
+            </div>
+          )}
 
           {validationResult.json_ld && (
             <div className="card bg-gradient-to-br from-blue-50 to-indigo-50">
