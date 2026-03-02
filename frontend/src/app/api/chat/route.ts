@@ -144,6 +144,7 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
         messages: [systemMessage, ...limitedMessages],
         temperature: 0.7,
         max_tokens: 500,
+        stream: true, // Enable streaming
         user: ip.substring(0, 50), // OpenAI user identifier for abuse monitoring
       }),
     });
@@ -157,41 +158,97 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
       );
     }
 
-    const data = await response.json();
-    const assistantMessage = data.choices[0].message.content;
+    // Stream the response
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const reader = response.body?.getReader();
+        if (!reader) {
+          controller.close();
+          return;
+        }
 
-    // Check if the response indicates an off-topic question
-    if (assistantMessage.startsWith("[OFF_TOPIC]")) {
-      console.log("⚠️ Off-topic question detected - tracking strike");
+        const decoder = new TextDecoder();
+        let fullMessage = "";
 
-      // Track the off-topic question
-      const result = chatCache.trackOffTopic(ip);
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-      // Remove the marker from the message before sending to user
-      const cleanedMessage = assistantMessage.replace("[OFF_TOPIC]", "").trim();
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split("\n");
 
-      // Build warning message based on strike count
-      let warning = "";
-      if (result.shouldPenalize) {
-        warning = `You've asked ${result.strikeCount} off-topic questions. You are now restricted for 5 minutes. Please focus on IUC02-related topics.`;
-      } else {
-        const remaining = 3 - result.strikeCount;
-        warning = `Off-topic question detected (Strike ${result.strikeCount}/3). ${remaining} more off-topic question(s) will result in a 5-minute restriction.`;
-      }
+            for (const line of lines) {
+              const trimmedLine = line.trim();
+              if (!trimmedLine || trimmedLine === "data: [DONE]") continue;
+              if (trimmedLine.startsWith("data: ")) {
+                try {
+                  const jsonData = JSON.parse(trimmedLine.substring(6));
+                  const content = jsonData.choices[0]?.delta?.content;
+                  if (content) {
+                    fullMessage += content;
+                    controller.enqueue(
+                      encoder.encode(`data: ${JSON.stringify({ content, fullMessage })}\n\n`)
+                    );
+                  }
+                } catch (e) {
+                  // Skip parse errors
+                }
+              }
+            }
+          }
 
-      // Don't cache off-topic responses
-      return NextResponse.json({
-        message: cleanedMessage,
-        warning: warning,
-        strikeCount: result.strikeCount,
-      });
-    }
+          // Check if off-topic after streaming completes
+          if (fullMessage.startsWith("[OFF_TOPIC]")) {
+            console.log("⚠️ Off-topic question detected - tracking strike");
+            const result = chatCache.trackOffTopic(ip);
+            const cleanedMessage = fullMessage.replace("[OFF_TOPIC]", "").trim();
 
-    // Cache the response (only for on-topic questions)
-    console.log("💾 Storing response in cache");
-    chatCache.set(cacheKey, assistantMessage);
+            let warning = "";
+            if (result.shouldPenalize) {
+              warning = `You've asked ${result.strikeCount} off-topic questions. You are now restricted for 5 minutes.`;
+            } else {
+              const remaining = 3 - result.strikeCount;
+              warning = `Off-topic question (Strike ${result.strikeCount}/3). ${remaining} more will result in restriction.`;
+            }
 
-    return NextResponse.json({ message: assistantMessage });
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ 
+                  content: "", 
+                  fullMessage: cleanedMessage, 
+                  warning, 
+                  strikeCount: result.strikeCount,
+                  done: true 
+                })}\n\n`
+              )
+            );
+          } else {
+            // Cache the response for on-topic questions
+            console.log("💾 Storing response in cache");
+            chatCache.set(cacheKey, fullMessage);
+
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ content: "", fullMessage, done: true })}\n\n`)
+            );
+          }
+
+          controller.close();
+        } catch (error) {
+          console.error("Streaming error:", error);
+          controller.error(error);
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
   } catch (error) {
     console.error("Error in chat API:", error);
     return NextResponse.json(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,6 +20,15 @@ export default function DataValidationPage() {
   const [analyzingWithAI, setAnalyzingWithAI] = useState(false);
   const [fixedRdf, setFixedRdf] = useState<any>(null);
   const [fixingErrors, setFixingErrors] = useState(false);
+  const [progressLog, setProgressLog] = useState<Array<{type: string, message: string, timestamp: Date}>>([]);
+  const progressLogRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll progress log
+  useEffect(() => {
+    if (progressLogRef.current) {
+      progressLogRef.current.scrollTop = progressLogRef.current.scrollHeight;
+    }
+  }, [progressLog]);
 
   const loadExampleFile = async (
     filename: string,
@@ -46,6 +55,7 @@ export default function DataValidationPage() {
     setLoading(true);
     setAiAnalysis(null); // Reset AI analysis when revalidating
     setFixedRdf(null); // Reset fixed RDF when revalidating
+    setProgressLog([]); // Clear progress log
     try {
       const response = await axios.post(`${API_URL}/api/validate`, {
         rdf_content: rdfContent,
@@ -97,17 +107,78 @@ export default function DataValidationPage() {
     }
 
     setFixingErrors(true);
+    setProgressLog([]);
+    setFixedRdf(null);
+    
+    const addLog = (type: string, message: string) => {
+      setProgressLog(prev => [...prev, { type, message, timestamp: new Date() }]);
+    };
+    
     try {
-      const response = await axios.post(`${API_URL}/api/fix-validation-errors`, {
-        validation_report: validationResult.report_text,
-        rdf_content: rdfContent,
-        shacl_content: shaclContent,
-        ai_analysis: aiAnalysis.analysis,
+      const response = await fetch(`${API_URL}/api/fix-validation-errors-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          validation_report: validationResult.report_text,
+          rdf_content: rdfContent,
+          shacl_content: shaclContent,
+          ai_analysis: aiAnalysis.analysis,
+        }),
       });
-      setFixedRdf(response.data);
+
+      if (!response.body) {
+        throw new Error('No response body');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              
+              if (data.type === 'done') {
+                setFixedRdf(data);
+                addLog('success', '✅ Process completed!');
+              } else if (data.type === 'error') {
+                addLog('error', data.message);
+              } else if (data.type === 'success') {
+                addLog('success', data.message);
+              } else if (data.type === 'warning') {
+                addLog('warning', data.message);
+              } else if (data.type === 'info') {
+                addLog('info', data.message);
+              } else if (data.type === 'progress') {
+                addLog('progress', data.message);
+              } else if (data.type === 'attempt') {
+                addLog('attempt', data.message);
+              } else if (data.type === 'streaming') {
+                // Just update progress, don't log every chunk
+                if (data.total_length % 500 === 0) {
+                  addLog('streaming', `Generated ${data.total_length} characters...`);
+                }
+              }
+            } catch (e) {
+              console.error('Error parsing SSE data:', e);
+            }
+          }
+        }
+      }
     } catch (error: any) {
+      addLog('error', `Error: ${error.message}`);
       alert(
-        `Error fixing validation issues: ${error.response?.data?.detail || error.message}`
+        `Error fixing validation issues: ${error.message}`
       );
     } finally {
       setFixingErrors(false);
@@ -489,6 +560,62 @@ export default function DataValidationPage() {
                       )}
                     </button>
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Progress Log - Show during fixing */}
+          {(fixingErrors || progressLog.length > 0) && (
+            <div className="card bg-gradient-to-br from-slate-50 to-gray-50 border-2 border-slate-300 animate-slide-up">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-3xl">{fixingErrors ? '⚙️' : '📋'}</span>
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900">
+                    {fixingErrors ? 'AI Fix Progress (Live)' : 'Fix Process Log'}
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    {fixingErrors ? 'Watch the AI work in real-time...' : 'Process completed'}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-sm" ref={progressLogRef}>
+                {progressLog.length === 0 && fixingErrors && (
+                  <div className="text-green-400 animate-pulse">
+                    ⚡ Starting AI fix process...
+                  </div>
+                )}
+                {progressLog.map((log, index) => (
+                  <div
+                    key={index}
+                    className={`py-1 ${
+                      log.type === 'error' ? 'text-red-400' :
+                      log.type === 'success' ? 'text-green-400' :
+                      log.type === 'warning' ? 'text-yellow-400' :
+                      log.type === 'attempt' ? 'text-blue-400 font-bold' :
+                      log.type === 'info' ? 'text-cyan-400' :
+                      log.type === 'streaming' ? 'text-purple-400' :
+                      'text-gray-300'
+                    }`}
+                  >
+                    <span className="text-gray-500 mr-2">
+                      [{log.timestamp.toLocaleTimeString()}]
+                    </span>
+                    {log.message}
+                  </div>
+                ))}
+                {fixingErrors && (
+                  <div className="text-green-400 animate-pulse mt-2">
+                    ▊
+                  </div>
+                )}
+              </div>
+              
+              {progressLog.length > 0 && !fixingErrors && (
+                <div className="mt-3 text-sm text-gray-600 flex items-center gap-2">
+                  <span>💡</span>
+                  <span>Process log shows {progressLog.length} events</span>
                 </div>
               )}
             </div>

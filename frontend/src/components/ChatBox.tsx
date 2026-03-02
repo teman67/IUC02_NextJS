@@ -88,37 +88,85 @@ export default function ChatBox() {
     setInput("");
     setIsLoading(true);
 
+    // Add a placeholder for the streaming response
+    const streamingMessageIndex = messages.length + 1;
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
     try {
-      const response = await axios.post("/api/chat", {
-        messages: [...messages, userMessage],
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: [...messages, userMessage],
+        }),
       });
 
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: response.data.message,
-      };
-
-      // Log if response was cached
-      if (response.data.cached) {
-        console.log("⚡ Response retrieved from cache (instant)");
-      } else {
-        console.log("🌐 Response from OpenAI API");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Show warning if off-topic with strike count
-      if (response.data.warning) {
-        console.warn("⚠️", response.data.warning);
-
-        // Add warning as a separate system message
-        const warningMessage: Message = {
-          role: "assistant",
-          content: `⚠️ WARNING: ${response.data.warning}`,
-        };
-        setMessages((prev) => [...prev, assistantMessage, warningMessage]);
-        return;
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
       }
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      const decoder = new TextDecoder();
+      let streamedContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              
+              if (data.content) {
+                streamedContent += data.content;
+                // Update the message in real-time
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[streamingMessageIndex] = {
+                    role: "assistant",
+                    content: streamedContent,
+                  };
+                  return newMessages;
+                });
+              }
+
+              if (data.done) {
+                // Final message update
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[streamingMessageIndex] = {
+                    role: "assistant",
+                    content: data.fullMessage,
+                  };
+                  return newMessages;
+                });
+
+                // Handle warnings for off-topic
+                if (data.warning) {
+                  console.warn("⚠️", data.warning);
+                  const warningMessage: Message = {
+                    role: "assistant",
+                    content: `⚠️ WARNING: ${data.warning}`,
+                  };
+                  setMessages((prev) => [...prev, warningMessage]);
+                }
+              }
+            } catch (e) {
+              console.error("Error parsing stream data:", e);
+            }
+          }
+        }
+      }
     } catch (error: any) {
       console.error("Error sending message:", error);
 
@@ -138,11 +186,11 @@ export default function ChatBox() {
         errorContent = "Invalid message format. Please try again.";
       }
 
-      const errorMessage: Message = {
-        role: "assistant",
-        content: errorContent,
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      // Remove the empty placeholder and add error message
+      setMessages((prev) => {
+        const newMessages = prev.slice(0, -1); // Remove placeholder
+        return [...newMessages, { role: "assistant", content: errorContent }];
+      });
     } finally {
       setIsLoading(false);
     }
@@ -328,12 +376,15 @@ export default function ChatBox() {
                       >
                         {message.content}
                       </ReactMarkdown>
+                      {isLoading && index === messages.length - 1 && message.content && (
+                        <span className="inline-block w-1.5 h-4 bg-gray-800 ml-0.5 animate-pulse"></span>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
             ))}
-            {isLoading && (
+            {isLoading && messages[messages.length - 1]?.content === "" && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-800 rounded-lg px-3 sm:px-4 py-2">
                   <div className="flex space-x-2">
