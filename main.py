@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 import pyshacl
@@ -11,6 +11,8 @@ from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 import httpx
+import json
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -568,6 +570,255 @@ Output the FULLY CORRECTED RDF (Turtle format ONLY, no markdown blocks):"""
             status_code=500, 
             detail=f"Fix generation error: {str(e)}"
         )
+
+@app.post("/api/fix-validation-errors-stream")
+async def fix_validation_errors_stream(request: ValidationFixRequest):
+    """
+    Stream AI progress while fixing validation errors
+    Uses Server-Sent Events (SSE) to provide real-time updates
+    """
+    async def generate_progress():
+        try:
+            # Get OpenAI API key
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'OpenAI API key not configured'})}\n\n"
+                return
+            
+            # Initialize OpenAI client
+            client = OpenAI(
+                api_key=api_key,
+                timeout=httpx.Timeout(90.0, connect=10.0),
+                max_retries=2
+            )
+            
+            # Count errors
+            error_count = request.validation_report.lower().count("constraint violation")
+            if error_count == 0:
+                error_count = request.validation_report.lower().count("result")
+            
+            yield f"data: {json.dumps({'type': 'info', 'message': f'🔍 Analyzing validation report... Found ~{error_count} constraint violations'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            error_context = f"\n**Estimated number of constraint violations: {error_count}**\n" if error_count > 0 else ""
+            
+            # Construct the fix prompt
+            prompt = f"""You are an expert in RDF/SHACL validation and semantic data correction. 
+
+A user has performed SHACL validation on their RDF data graph, and the validation FAILED with MULTIPLE ERRORS.
+{error_context}
+**Original Validation Report (READ CAREFULLY - contains ALL errors to fix):**
+```
+{request.validation_report}
+```
+
+**Original Data Graph (RDF - Turtle format):**
+```turtle
+{request.rdf_content}
+```
+
+**Shape Graph (SHACL - Turtle format):**
+```turtle
+{request.shacl_content}
+```
+
+**AI Analysis of Issues:**
+{request.ai_analysis}
+
+CRITICAL STEP-BY-STEP INSTRUCTIONS:
+
+STEP 1: Extract EXACT property names from validation report
+   - Look for "Result Path:" in each error
+   - Copy the EXACT property name (case-sensitive, character-for-character)
+   - Example: If it says "Result Path: :dateOftestStart" use EXACTLY ":dateOftestStart" (NOT :dateOfTestStart)
+
+STEP 2: For EACH error in the validation report:
+   - Note the Focus Node (which resource has the issue)
+   - Note the Result Path (EXACT property name - preserve exact capitalization)
+   - Note what's required (MinCount, MaxCount, datatype, etc.)
+   - Note the constraint violation message
+
+STEP 3: Generate fixes using EXACT property names
+   - Use the EXACT property names from the validation report
+   - Do NOT change capitalization or spelling
+   - If report says ":dateOftestStart", use ":dateOftestStart" (not :dateOfTestStart)
+   - Match every property name character-for-character with the validation report
+
+STEP 4: Apply ALL fixes systematically
+   - Fix EVERY error found in the validation report
+   - Preserve all valid data from original
+   - Add inline comments (using #) explaining each fix
+
+CRITICAL REQUIREMENTS:
+- **EXACT PROPERTY NAME MATCHING**: Use property names EXACTLY as shown in "Result Path:" of validation report
+- Property names are **CASE-SENSITIVE**: :dateOftestStart ≠ :dateOfTestStart
+- Fix EVERY SINGLE ERROR from the validation report
+- Preserve all valid data and structure from the original
+- Output ONLY the corrected RDF Turtle format
+- NO markdown code blocks (```), NO explanations before/after
+- Ensure syntactically valid Turtle format
+
+Output the complete corrected RDF Data Graph in Turtle format:"""
+            
+            max_attempts = 3
+            attempts = 0
+            fixed_rdf = ""
+            validation_passed = False
+            validation_status = ""
+            
+            while attempts < max_attempts and not validation_passed:
+                attempts += 1
+                yield f"data: {json.dumps({'type': 'attempt', 'attempt': attempts, 'max_attempts': max_attempts, 'message': f'🤖 Attempt {attempts}/{max_attempts}: AI is generating fixes...'})}\n\n"
+                await asyncio.sleep(0.1)
+                
+                # Use different prompt for retry attempts
+                if attempts > 1:
+                    # Extract property names from remaining errors
+                    remaining_property_names = []
+                    for line in validation_status.split('\n'):
+                        if 'Result Path:' in line:
+                            prop = line.split('Result Path:')[1].strip()
+                            remaining_property_names.append(prop)
+                    
+                    property_emphasis = ""
+                    if remaining_property_names:
+                        property_emphasis = f"\n**⚠️ EXACT PROPERTY NAMES TO FIX (copy these exactly):**\n" + "\n".join([f"   - {prop}" for prop in remaining_property_names]) + "\n"
+                        properties_list = ", ".join(remaining_property_names)
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'🔍 Targeting specific properties: {properties_list}'})}\n\n"
+                    
+                    prompt = f"""Your previous fix attempt (attempt #{attempts-1}) still has validation errors. You need to fix the REMAINING errors.
+
+**REMAINING VALIDATION ERRORS (these must ALL be fixed):**
+```
+{validation_status}
+```
+{property_emphasis}
+**Your previous fix attempt #{attempts-1} (that still has errors above):**
+```turtle
+{fixed_rdf}
+```
+
+**Original SHACL Shape constraints (for reference):**
+```turtle
+{request.shacl_content[:1500]}{'...' if len(request.shacl_content) > 1500 else ''}
+```
+
+CRITICAL: This is attempt #{attempts} of {max_attempts}. 
+
+🔴 COMMON MISTAKE TO AVOID:
+   - Using wrong property name capitalization
+   - Example: If error shows ":dateOftestStart" (lowercase 't'), don't use ":dateOfTestStart" (uppercase 'T')
+   - Look at "Result Path:" in the error and copy it EXACTLY
+
+YOU MUST:
+1. Read "Result Path:" in EACH error above - copy property names EXACTLY (character-by-character)
+2. Look at the Focus Node to see which resource needs the property
+3. Fix ALL remaining errors using the EXACT property names
+4. Keep all the corrections from the previous attempt
+5. Only add/modify what's needed to fix the remaining errors with EXACT property names
+
+Output the FULLY CORRECTED RDF (Turtle format ONLY, no markdown blocks):"""
+                
+                # Stream the AI response
+                yield f"data: {json.dumps({'type': 'progress', 'message': '✍️ AI is writing corrected RDF...'})}\n\n"
+                
+                stream = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert RDF/SHACL data correction assistant. You systematically fix ALL validation errors by carefully analyzing each one. CRITICAL: Property names are case-sensitive - you MUST use EXACT property names from the validation report's 'Result Path:' fields (e.g., :dateOftestStart is different from :dateOfTestStart). You output ONLY valid RDF Turtle format with ALL corrections applied using EXACT property names. Never use markdown code blocks - output pure Turtle syntax only."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.1,
+                    max_tokens=4500,
+                    stream=True  # Enable streaming
+                )
+                
+                fixed_rdf = ""
+                chunk_count = 0
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        fixed_rdf += content
+                        chunk_count += 1
+                        # Send progress every 10 chunks to avoid overwhelming
+                        if chunk_count % 10 == 0:
+                            yield f"data: {json.dumps({'type': 'streaming', 'partial_content': content, 'total_length': len(fixed_rdf)})}\n\n"
+                
+                # Clean up markdown blocks
+                fixed_rdf = fixed_rdf.strip()
+                if fixed_rdf.startswith("```turtle"):
+                    fixed_rdf = fixed_rdf[9:]
+                elif fixed_rdf.startswith("```ttl"):
+                    fixed_rdf = fixed_rdf[6:]
+                elif fixed_rdf.startswith("```"):
+                    fixed_rdf = fixed_rdf[3:]
+                if fixed_rdf.endswith("```"):
+                    fixed_rdf = fixed_rdf[:-3]
+                fixed_rdf = fixed_rdf.strip()
+                
+                yield f"data: {json.dumps({'type': 'progress', 'message': f'✅ Generated {len(fixed_rdf)} characters of RDF'})}\n\n"
+                await asyncio.sleep(0.1)
+                
+                # Validate syntax
+                yield f"data: {json.dumps({'type': 'progress', 'message': '🔍 Checking RDF syntax...'})}\n\n"
+                try:
+                    test_graph = Graph()
+                    test_graph.parse(data=fixed_rdf, format="turtle")
+                    yield f"data: {json.dumps({'type': 'success', 'message': '✅ RDF syntax is valid'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'❌ Syntax error: {str(e)}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'fixed_rdf': fixed_rdf, 'syntax_valid': False, 'syntax_error': str(e), 'validation_passed': False, 'attempts': attempts})}\n\n"
+                    return
+                
+                # Validate against SHACL
+                yield f"data: {json.dumps({'type': 'progress', 'message': '🔍 Validating against SHACL shapes...'})}\n\n"
+                try:
+                    data_graph = Graph()
+                    data_graph.parse(data=fixed_rdf, format="turtle")
+                    
+                    shacl_graph = Graph()
+                    shacl_graph.parse(data=request.shacl_content, format="turtle")
+                    
+                    conforms, results_graph, results_text = pyshacl.validate(
+                        data_graph,
+                        shacl_graph=shacl_graph,
+                        inference='rdfs',
+                        abort_on_first=False,
+                    )
+                    
+                    validation_passed = conforms
+                    validation_status = results_text
+                    
+                    if conforms:
+                        yield f"data: {json.dumps({'type': 'success', 'message': f'🎉 Validation PASSED on attempt {attempts}!'})}\n\n"
+                        break
+                    else:
+                        remaining_errors = results_text.count("Constraint Violation")
+                        yield f"data: {json.dumps({'type': 'warning', 'message': f'⚠️ Still has {remaining_errors} validation error(s)'})}\n\n"
+                        if attempts < max_attempts:
+                            yield f"data: {json.dumps({'type': 'info', 'message': f'🔄 Preparing retry attempt {attempts + 1}...'})}\n\n"
+                        await asyncio.sleep(0.5)
+                        
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'❌ Validation error: {str(e)}'})}\n\n"
+                    validation_status = str(e)
+                    break
+            
+            # Send final result
+            final_status = "Validation passed! ✅" if validation_passed else f"Still has validation issues (after {attempts} attempt(s)):\n{validation_status}"
+            
+            yield f"data: {json.dumps({'type': 'done', 'fixed_rdf': fixed_rdf, 'syntax_valid': True, 'validation_passed': validation_passed, 'validation_status': final_status, 'attempts': attempts, 'max_attempts': max_attempts, 'model': 'gpt-4o', 'original_error_count': error_count if error_count > 0 else None})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Error: {str(e)}'})}\n\n"
+    
+    return StreamingResponse(generate_progress(), media_type="text/event-stream")
 
 if __name__ == "__main__":
     import uvicorn
