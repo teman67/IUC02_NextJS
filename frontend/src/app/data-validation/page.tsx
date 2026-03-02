@@ -18,6 +18,8 @@ export default function DataValidationPage() {
   );
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
   const [analyzingWithAI, setAnalyzingWithAI] = useState(false);
+  const [fixedRdf, setFixedRdf] = useState<any>(null);
+  const [fixingErrors, setFixingErrors] = useState(false);
 
   const loadExampleFile = async (
     filename: string,
@@ -43,6 +45,7 @@ export default function DataValidationPage() {
 
     setLoading(true);
     setAiAnalysis(null); // Reset AI analysis when revalidating
+    setFixedRdf(null); // Reset fixed RDF when revalidating
     try {
       const response = await axios.post(`${API_URL}/api/validate`, {
         rdf_content: rdfContent,
@@ -65,6 +68,7 @@ export default function DataValidationPage() {
     }
 
     setAnalyzingWithAI(true);
+    setFixedRdf(null); // Reset fixed RDF when re-analyzing
     try {
       const response = await axios.post(`${API_URL}/api/analyze-validation`, {
         validation_report: validationResult.report_text,
@@ -79,6 +83,34 @@ export default function DataValidationPage() {
       );
     } finally {
       setAnalyzingWithAI(false);
+    }
+  };
+
+  const handleFixErrors = async () => {
+    if (!validationResult || validationResult.conforms) {
+      return; // Only fix if there are errors
+    }
+
+    if (!aiAnalysis) {
+      alert("Please analyze with AI first before attempting to fix errors");
+      return;
+    }
+
+    setFixingErrors(true);
+    try {
+      const response = await axios.post(`${API_URL}/api/fix-validation-errors`, {
+        validation_report: validationResult.report_text,
+        rdf_content: rdfContent,
+        shacl_content: shaclContent,
+        ai_analysis: aiAnalysis.analysis,
+      });
+      setFixedRdf(response.data);
+    } catch (error: any) {
+      alert(
+        `Error fixing validation issues: ${error.response?.data?.detail || error.message}`
+      );
+    } finally {
+      setFixingErrors(false);
     }
   };
 
@@ -427,6 +459,148 @@ export default function DataValidationPage() {
                   {aiAnalysis.analysis}
                 </ReactMarkdown>
               </div>
+
+              {/* AI Fix Button - Only show if validation failed */}
+              {!validationResult.conforms && (
+                <div className="mt-4 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">🔧</span>
+                      <div>
+                        <h4 className="text-lg font-bold text-gray-900">Want AI to fix these errors?</h4>
+                        <p className="text-sm text-gray-600">
+                          Our AI agent can attempt to automatically correct the validation errors
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleFixErrors}
+                      disabled={fixingErrors}
+                      className="btn-primary bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 whitespace-nowrap"
+                    >
+                      {fixingErrors ? (
+                        <span className="flex items-center gap-2">
+                          <span className="animate-spin">🔧</span> Fixing Errors...
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-2">
+                          <span>🔧</span> Yes, Fix Errors with AI
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Fixed RDF Result */}
+          {fixedRdf && (
+            <div className="card bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-400 animate-slide-up">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-4xl">🔧</span>
+                <div className="flex-1">
+                  <h3 className="text-2xl font-bold text-gray-900">AI Auto-Fix Results</h3>
+                  <p className="text-sm text-gray-600 mb-1">
+                    {fixedRdf.validation_passed ? (
+                      <span className="text-green-700 font-semibold">
+                        ✅ Fixed RDF passes SHACL validation!
+                        {fixedRdf.attempts > 1 && ` (Success on attempt ${fixedRdf.attempts}/${fixedRdf.max_attempts})`}
+                      </span>
+                    ) : fixedRdf.syntax_valid ? (
+                      <span className="text-yellow-700 font-semibold">
+                        ⚠️ Partial fix - some errors remain
+                        {fixedRdf.attempts > 1 && ` (${fixedRdf.attempts}/${fixedRdf.max_attempts} attempts made)`}
+                      </span>
+                    ) : (
+                      <span className="text-red-700 font-semibold">❌ Syntax error in generated fix</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Powered by {fixedRdf.model}
+                    {fixedRdf.original_error_count && ` • Original errors detected: ${fixedRdf.original_error_count}`}
+                    {fixedRdf.attempts > 1 && ` • Made ${fixedRdf.attempts} intelligent correction passes`}
+                  </p>
+                </div>
+              </div>
+
+              {fixedRdf.syntax_valid ? (
+                <>
+                  <div className="bg-white p-4 rounded-lg shadow-inner mb-4">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-2">Corrected Data Graph:</h4>
+                    <textarea
+                      value={fixedRdf.fixed_rdf}
+                      readOnly
+                      className="w-full h-96 p-3 border-2 border-green-300 rounded-lg font-mono text-sm bg-gray-50 focus:ring-2 focus:ring-green-400 outline-none"
+                    />
+                  </div>
+
+                  <div className="flex gap-4 flex-wrap">
+                    <button
+                      onClick={() => downloadFile(fixedRdf.fixed_rdf, "fixed_data_graph.ttl")}
+                      className="btn-primary bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                    >
+                      📥 Download Fixed RDF
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        setRdfContent(fixedRdf.fixed_rdf);
+                        alert("Fixed RDF loaded into editor. You can now validate it again.");
+                      }}
+                      className="btn-secondary bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                    >
+                      📝 Load Fixed RDF into Editor
+                    </button>
+                  </div>
+
+                  {fixedRdf.validation_status && (
+                    <div className={`mt-4 p-4 rounded-lg border-2 ${fixedRdf.validation_passed ? 'bg-green-50 border-green-300' : 'bg-yellow-50 border-yellow-300'}`}>
+                      <h4 className="text-md font-semibold text-gray-900 mb-2">
+                        {fixedRdf.validation_passed ? '✅ Validation Check:' : '⚠️ Partial Fix Details:'}
+                      </h4>
+                      <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
+                        {fixedRdf.validation_status}
+                      </pre>
+                      {!fixedRdf.validation_passed && (
+                        <div className="mt-3 p-3 bg-white rounded border border-yellow-400">
+                          <p className="text-sm text-gray-800">
+                            <strong>💡 Suggestion:</strong> The AI made progress but couldn't fix all errors. 
+                            You can:
+                          </p>
+                          <ul className="text-sm text-gray-700 mt-2 ml-4 list-disc space-y-1">
+                            <li>Load the partial fix into the editor and click "Fix Errors with AI" again</li>
+                            <li>Manually review and correct the remaining issues</li>
+                            <li><strong>Check for case-sensitive property names</strong> (e.g., :dateOftestStart vs :dateOfTestStart)</li>
+                            <li>Verify the SHACL shapes use correct property names</li>
+                          </ul>
+                          <div className="mt-2 p-2 bg-blue-50 rounded border border-blue-300">
+                            <p className="text-xs text-blue-900">
+                              <strong>⚠️ Common Issue:</strong> Property names in RDF are case-sensitive. 
+                              Make sure your data uses the exact same property names as your SHACL shapes.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="bg-red-50 p-4 rounded-lg border-2 border-red-300">
+                  <h4 className="text-lg font-semibold text-red-900 mb-2">⚠️ Syntax Error</h4>
+                  <p className="text-sm text-red-700 mb-2">
+                    The AI-generated fix has syntax errors. Please review manually:
+                  </p>
+                  <pre className="text-sm text-red-800 bg-white p-3 rounded border border-red-300 overflow-x-auto">
+                    {fixedRdf.syntax_error}
+                  </pre>
+                  <textarea
+                    value={fixedRdf.fixed_rdf}
+                    readOnly
+                    className="w-full h-64 p-3 border-2 border-red-300 rounded-lg font-mono text-sm bg-white mt-3"
+                  />
+                </div>
+              )}
             </div>
           )}
 
