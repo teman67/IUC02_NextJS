@@ -122,13 +122,14 @@ export async function GET() {
       return NextResponse.json({ success: false, message: 'Supabase not configured' });
     }
 
-    // Fetch total visit count from Supabase
-    const response = await fetch(`${supabaseUrl}/rest/v1/app_visits`, {
-      method: 'GET',
+    // Fetch total visit count from Supabase using count header (more efficient)
+    const response = await fetch(`${supabaseUrl}/rest/v1/app_visits?select=count`, {
+      method: 'HEAD',
       headers: {
         'Content-Type': 'application/json',
         'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Prefer': 'count=exact'
       }
     });
 
@@ -141,8 +142,9 @@ export async function GET() {
       );
     }
 
-    const data = await response.json();
-    const totalVisits = data.length; // Assuming each row represents a visit
+    // Extract count from Content-Range header (format: "0-999/1020" or "*/1020")
+    const contentRange = response.headers.get('content-range');
+    const totalVisits = contentRange ? parseInt(contentRange.split('/')[1]) : 0;
 
     return NextResponse.json({ success: true, totalVisits });
   } catch (error) {
