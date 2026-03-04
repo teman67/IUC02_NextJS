@@ -12,6 +12,14 @@ interface Message {
   content: string;
 }
 
+const SUGGESTED_QUESTIONS = [
+  "What is RDF and how is it used?",
+  "How does SHACL validation work?",
+  "How do I generate RDF data?",
+  "What is the IUC02 workflow?",
+  "How do I validate my data?",
+];
+
 export default function ChatBox() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
@@ -23,6 +31,7 @@ export default function ChatBox() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(true);
   const [chatSize, setChatSize] = useState({ width: 600, height: 650 });
   const [isResizing, setIsResizing] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -80,10 +89,11 @@ export default function ChatBox() {
     };
   }, [isResizing]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+  const sendMessage = async (messageText?: string) => {
+    const textToSend = messageText || input;
+    if (!textToSend.trim() || isLoading) return;
 
-    const userMessage: Message = { role: "user", content: input };
+    const userMessage: Message = { role: "user", content: textToSend };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
@@ -194,6 +204,10 @@ export default function ChatBox() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSuggestionClick = (question: string) => {
+    sendMessage(question);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -406,6 +420,24 @@ export default function ChatBox() {
 
           {/* Input */}
           <div className="border-t border-gray-200 p-3 sm:p-4 shrink-0">
+            {/* Suggested questions */}
+            {showSuggestions && (
+              <div className="mb-3 space-y-2">
+                <p className="text-xs text-gray-500 font-medium">Suggested questions:</p>
+                <div className="flex flex-wrap gap-2">
+                  {SUGGESTED_QUESTIONS.map((question, qIndex) => (
+                    <button
+                      key={qIndex}
+                      onClick={() => handleSuggestionClick(question)}
+                      disabled={isLoading}
+                      className="text-xs sm:text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-2 rounded-lg border border-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex gap-2 items-center">
               <input
                 type="text"
@@ -417,7 +449,7 @@ export default function ChatBox() {
                 disabled={isLoading}
               />
               <button
-                onClick={sendMessage}
+                onClick={() => sendMessage()}
                 disabled={isLoading || !input.trim()}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-2 sm:px-3 sm:py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
               >
