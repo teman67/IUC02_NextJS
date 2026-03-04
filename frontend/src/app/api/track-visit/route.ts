@@ -27,48 +27,64 @@ export async function POST(request: NextRequest) {
     let city = 'Unknown';
     let country = 'Unknown';
     
+    /** Fetch a URL with automatic retries and exponential backoff. */
+    async function fetchWithRetry(
+      url: string,
+      options: RequestInit,
+      retries = 3,
+      baseDelayMs = 500
+    ): Promise<Response> {
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 5000); // 5 s per attempt
+          const res = await fetch(url, { ...options, signal: controller.signal });
+          clearTimeout(timer);
+          if (res.ok) return res;
+          throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          if (attempt === retries) throw err;
+          const delay = baseDelayMs * 2 ** (attempt - 1);
+          console.warn(`⚠️ Attempt ${attempt} failed, retrying in ${delay}ms:`, (err as Error).message);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+      throw new Error('Max retries exceeded');
+    }
+
     if (ip !== 'unknown' && ip !== '::1' && ip !== '127.0.0.1') {
       try {
         // Try ipinfo.io first if token is available
         if (ipinfoToken) {
-          const geoResponse = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`, {
-            headers: {
-              'Accept': 'application/json'
-            }
-          });
-          
-          if (geoResponse.ok) {
-            const geoData = await geoResponse.json();
-            city = geoData.city || 'Unknown';
-            country = geoData.country || 'Unknown';
-            console.log(`✅ ipinfo.io: ${city}, ${country}`);
-            console.log(`📊 Full data:`, JSON.stringify(geoData, null, 2));
-          } else {
-            const errorText = await geoResponse.text();
-            console.error(`❌ ipinfo.io failed (${geoResponse.status}):`, errorText);
-            throw new Error('ipinfo.io failed');
-          }
+          const geoResponse = await fetchWithRetry(
+            `https://ipinfo.io/${ip}?token=${ipinfoToken}`,
+            { headers: { 'Accept': 'application/json' } }
+          );
+          const geoData = await geoResponse.json();
+          city = geoData.city || 'Unknown';
+          country = geoData.country || 'Unknown';
+          console.log(`✅ ipinfo.io: ${city}, ${country}`);
         } else {
           throw new Error('No API token');
         }
       } catch (error) {
         // Fallback to free ip-api.com service (no auth required)
-        console.log(`⚠️ Trying fallback service (ip-api.com)...`);
+        console.log(`⚠️ Trying fallback service (ip-api.com)... error: ${(error as Error).message}`);
         try {
-          const fallbackResponse = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,city,query`);
-          if (fallbackResponse.ok) {
-            const fallbackData = await fallbackResponse.json();
-            if (fallbackData.status === 'success') {
-              city = fallbackData.city || 'Unknown';
-              country = fallbackData.countryCode || 'Unknown';
-              console.log(`✅ ip-api.com: ${city}, ${country}`);
-              console.log(`📊 Fallback data:`, JSON.stringify(fallbackData, null, 2));
-            } else {
-              console.error(`❌ ip-api.com returned error:`, fallbackData.message);
-            }
+          const fallbackResponse = await fetchWithRetry(
+            `http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,city,query`,
+            {}
+          );
+          const fallbackData = await fallbackResponse.json();
+          if (fallbackData.status === 'success') {
+            city = fallbackData.city || 'Unknown';
+            country = fallbackData.countryCode || 'Unknown';
+            console.log(`✅ ip-api.com: ${city}, ${country}`);
+          } else {
+            console.error(`❌ ip-api.com returned error:`, fallbackData.message);
           }
         } catch (fallbackError) {
-          console.error('❌ Fallback geolocation also failed:', fallbackError);
+          console.error('❌ Fallback geolocation also failed:', (fallbackError as Error).message);
         }
       }
     } else {

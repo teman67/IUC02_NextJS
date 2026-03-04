@@ -3,7 +3,7 @@
 import { useState } from 'react'
 
 export default function WarningMessage() {
-  const [isVisible, setIsVisible] = useState(false)
+  const [isVisible, setIsVisible] = useState(true)
 
   if (!isVisible) return null
 

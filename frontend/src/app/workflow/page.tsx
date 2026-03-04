@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import WorkflowDiagram from '@/components/WorkflowDiagram'
-import WarningMessage from '@/components/WarningMessage'
 
 export default function Workflow() {
   return (
     <div className="max-w-7xl mx-auto">
-      <WarningMessage />
+      
       
       <div className="mb-12 animate-slide-up">
         <h1 className="section-title mb-3">

@@ -1,11 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+/** Copy text to clipboard and return whether it succeeded. */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default function DataValidationPage() {
   const [rdfContent, setRdfContent] = useState("");
@@ -22,6 +32,16 @@ export default function DataValidationPage() {
   const [fixingErrors, setFixingErrors] = useState(false);
   const [progressLog, setProgressLog] = useState<Array<{type: string, message: string, timestamp: Date}>>([]);
   const progressLogRef = useRef<HTMLDivElement>(null);
+  const sseAbortRef = useRef<AbortController | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
+  }, []);
 
   // Auto-scroll progress log
   useEffect(() => {
@@ -113,6 +133,9 @@ export default function DataValidationPage() {
     const addLog = (type: string, message: string) => {
       setProgressLog(prev => [...prev, { type, message, timestamp: new Date() }]);
     };
+
+    const controller = new AbortController();
+    sseAbortRef.current = controller;
     
     try {
       const response = await fetch(`${API_URL}/api/fix-validation-errors-stream`, {
@@ -120,6 +143,7 @@ export default function DataValidationPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           validation_report: validationResult.report_text,
           rdf_content: rdfContent,
@@ -176,12 +200,15 @@ export default function DataValidationPage() {
         }
       }
     } catch (error: any) {
-      addLog('error', `Error: ${error.message}`);
-      alert(
-        `Error fixing validation issues: ${error.message}`
-      );
+      if (error?.name === 'AbortError') {
+        addLog('warning', '⏹ Fix process was cancelled by user.');
+      } else {
+        addLog('error', `Error: ${error.message}`);
+        alert(`Error fixing validation issues: ${error.message}`);
+      }
     } finally {
       setFixingErrors(false);
+      sseAbortRef.current = null;
     }
   };
 
@@ -474,6 +501,22 @@ export default function DataValidationPage() {
               className="w-full h-64 p-3 border-2 border-gray-300 rounded-lg font-mono text-sm bg-gray-50"
             />
             
+            {/* Report action buttons */}
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                onClick={() => handleCopy(validationResult.report_text, 'report')}
+                className="btn-secondary text-sm px-3 py-1.5"
+              >
+                {copiedKey === 'report' ? '✅ Copied!' : '📋 Copy Report'}
+              </button>
+              <button
+                onClick={() => downloadFile(validationResult.report_text, 'shacl_report.txt')}
+                className="btn-secondary text-sm px-3 py-1.5"
+              >
+                📥 Download Report
+              </button>
+            </div>
+            
             {/* AI Analysis Button */}
             <div className="mt-4">
               <button
@@ -531,6 +574,22 @@ export default function DataValidationPage() {
                 </ReactMarkdown>
               </div>
 
+              {/* Copy / Download AI analysis */}
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  onClick={() => handleCopy(aiAnalysis.analysis, 'ai-analysis')}
+                  className="btn-secondary text-sm px-3 py-1.5"
+                >
+                  {copiedKey === 'ai-analysis' ? '✅ Copied!' : '📋 Copy Analysis'}
+                </button>
+                <button
+                  onClick={() => downloadFile(aiAnalysis.analysis, 'ai_analysis.md')}
+                  className="btn-secondary text-sm px-3 py-1.5"
+                >
+                  📥 Download Analysis
+                </button>
+              </div>
+
               {/* AI Fix Button - Only show if validation failed */}
               {!validationResult.conforms && (
                 <div className="mt-4 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg">
@@ -544,6 +603,15 @@ export default function DataValidationPage() {
                         </p>
                       </div>
                     </div>
+                    <div className="flex gap-2 flex-wrap">
+                    {fixingErrors ? (
+                      <button
+                        onClick={() => sseAbortRef.current?.abort()}
+                        className="btn-secondary bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 whitespace-nowrap"
+                      >
+                        ⏹ Cancel Fix
+                      </button>
+                    ) : null}
                     <button
                       onClick={handleFixErrors}
                       disabled={fixingErrors}
@@ -559,6 +627,7 @@ export default function DataValidationPage() {
                         </span>
                       )}
                     </button>
+                    </div>
                   </div>
                 </div>
               )}

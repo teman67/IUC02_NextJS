@@ -155,13 +155,20 @@ If a question is OFF-TOPIC:
 Be helpful, clear, and concise. Explain technical concepts in simple terms when needed.`,
     };
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
+    // Set a 30-second timeout for the OpenAI call to avoid hanging serverless functions
+    const openaiAbort = new AbortController();
+    const openaiTimeout = setTimeout(() => openaiAbort.abort(), 30_000);
+
+    let response: globalThis.Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        signal: openaiAbort.signal,
+        body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [systemMessage, ...limitedMessages],
         temperature: 0.7,
@@ -171,8 +178,12 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
       }),
     });
 
+    } finally {
+      clearTimeout(openaiTimeout);
+    }
+
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       console.error("OpenAI API error:", errorData);
       return NextResponse.json(
         { error: "Failed to get response from OpenAI" },
@@ -182,11 +193,23 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
 
     // Stream the response
     const encoder = new TextEncoder();
+    let cancelled = false;
+
+    const safeEnqueue = (ctrl: ReadableStreamDefaultController, data: string) => {
+      if (cancelled) return;
+      try { ctrl.enqueue(encoder.encode(data)); } catch { /* controller already closed */ }
+    };
+
+    const safeClose = (ctrl: ReadableStreamDefaultController) => {
+      if (cancelled) return;
+      try { ctrl.close(); } catch { /* already closed */ }
+    };
+
     const stream = new ReadableStream({
       async start(controller) {
         const reader = response.body?.getReader();
         if (!reader) {
-          controller.close();
+          safeClose(controller);
           return;
         }
 
@@ -196,12 +219,13 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
         try {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || cancelled) break;
 
             const chunk = decoder.decode(value, { stream: true });
             const lines = chunk.split("\n");
 
             for (const line of lines) {
+              if (cancelled) break;
               const trimmedLine = line.trim();
               if (!trimmedLine || trimmedLine === "data: [DONE]") continue;
               if (trimmedLine.startsWith("data: ")) {
@@ -210,8 +234,9 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
                   const content = jsonData.choices[0]?.delta?.content;
                   if (content) {
                     fullMessage += content;
-                    controller.enqueue(
-                      encoder.encode(`data: ${JSON.stringify({ content, fullMessage })}\n\n`)
+                    safeEnqueue(
+                      controller,
+                      `data: ${JSON.stringify({ content, fullMessage })}\n\n`
                     );
                   }
                 } catch (e) {
@@ -220,6 +245,8 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
               }
             }
           }
+
+          if (cancelled) return;
 
           // Check if off-topic after streaming completes
           if (fullMessage.startsWith("[OFF_TOPIC]")) {
@@ -235,32 +262,41 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
               warning = `Off-topic question (Strike ${result.strikeCount}/3). ${remaining} more will result in restriction.`;
             }
 
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ 
-                  content: "", 
-                  fullMessage: cleanedMessage, 
-                  warning, 
-                  strikeCount: result.strikeCount,
-                  done: true 
-                })}\n\n`
-              )
+            safeEnqueue(
+              controller,
+              `data: ${JSON.stringify({ 
+                content: "", 
+                fullMessage: cleanedMessage, 
+                warning, 
+                strikeCount: result.strikeCount,
+                done: true 
+              })}\n\n`
             );
           } else {
             // Cache the response for on-topic questions
             console.log("💾 Storing response in cache");
             chatCache.set(cacheKey, fullMessage);
 
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ content: "", fullMessage, done: true })}\n\n`)
+            safeEnqueue(
+              controller,
+              `data: ${JSON.stringify({ content: "", fullMessage, done: true })}\n\n`
             );
           }
 
-          controller.close();
-        } catch (error) {
+          safeClose(controller);
+        } catch (error: any) {
+          if (cancelled || error?.name === "AbortError") {
+            // Client cancelled – silently stop, no error surfaced
+            return;
+          }
           console.error("Streaming error:", error);
-          controller.error(error);
+          if (!cancelled) {
+            try { controller.error(error); } catch { /* already closed */ }
+          }
         }
+      },
+      cancel() {
+        cancelled = true;
       },
     });
 

@@ -37,6 +37,7 @@ export default function ChatBox() {
   const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Check for mobile on mount and resize
   useEffect(() => {
@@ -98,6 +99,10 @@ export default function ChatBox() {
     setInput("");
     setIsLoading(true);
 
+    // Create a fresh abort controller for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     // Add a placeholder for the streaming response
     const streamingMessageIndex = messages.length + 1;
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
@@ -108,6 +113,7 @@ export default function ChatBox() {
         headers: {
           "Content-Type": "application/json",
         },
+        signal: controller.signal,
         body: JSON.stringify({
           messages: [...messages, userMessage],
         }),
@@ -126,6 +132,7 @@ export default function ChatBox() {
       let streamedContent = "";
 
       while (true) {
+        if (controller.signal.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -178,8 +185,16 @@ export default function ChatBox() {
         }
       }
     } catch (error: any) {
-      console.error("Error sending message:", error);
+      // Don't show an error if the user deliberately cancelled
+      if (error?.name === "AbortError") {
+        setMessages((prev) => {
+          const newMessages = prev.slice(0, -1);
+          return [...newMessages, { role: "assistant", content: "_(Request cancelled)_" }];
+        });
+        return;
+      }
 
+      console.error("Error sending message:", error);
       let errorContent = "Sorry, I encountered an error. Please try again.";
 
       // Handle penalty (403 Forbidden)
@@ -203,6 +218,7 @@ export default function ChatBox() {
       });
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -438,8 +454,15 @@ export default function ChatBox() {
                 </div>
               </div>
             )}
-            <div className="flex gap-2 items-center">
-              <input
+            <div className="flex gap-2 items-center">              {isLoading && (
+                <button
+                  onClick={() => abortControllerRef.current?.abort("User cancelled")}
+                  className="text-xs text-red-500 hover:text-red-700 border border-red-300 rounded px-2 py-1 transition-colors"
+                  title="Stop generation"
+                >
+                  ⏹ Stop
+                </button>
+              )}              <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
