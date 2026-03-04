@@ -34,6 +34,17 @@ export default function DataValidationPage() {
   const progressLogRef = useRef<HTMLDivElement>(null);
   const sseAbortRef = useRef<AbortController | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'info' | 'warning' = 'success') => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setToast({ message, type });
+      toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+    },
+    []
+  );
 
   const handleCopy = useCallback(async (text: string, key: string) => {
     const ok = await copyToClipboard(text);
@@ -224,6 +235,29 @@ export default function DataValidationPage() {
 
   return (
     <div className="max-w-7xl mx-auto animate-fade-in">
+
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-4 rounded-2xl shadow-xl border transition-all duration-300 animate-slide-down
+            ${toast.type === 'success' ? 'bg-green-50 border-green-400 text-green-900' :
+              toast.type === 'warning' ? 'bg-amber-50 border-amber-400 text-amber-900' :
+              'bg-blue-50 border-blue-400 text-blue-900'}`}
+        >
+          <span className="text-xl">
+            {toast.type === 'success' ? '✅' : toast.type === 'warning' ? '⚠️' : 'ℹ️'}
+          </span>
+          <p className="font-medium text-sm sm:text-base">{toast.message}</p>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-2 text-gray-400 hover:text-gray-700 transition-colors text-lg font-bold leading-none"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <h2 className="section-title mb-6">Data Validation Workflow</h2>
 
       <div className="card bg-gradient-to-br from-blue-50 to-indigo-50 mb-8">
@@ -742,7 +776,8 @@ export default function DataValidationPage() {
                     <button
                       onClick={() => {
                         setRdfContent(fixedRdf.fixed_rdf);
-                        alert("Fixed RDF loaded into editor. You can now validate it again.");
+                        showToast('✅ Fixed RDF loaded into the editor. You can now validate it again.');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
                       className="btn-secondary bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
                     >
