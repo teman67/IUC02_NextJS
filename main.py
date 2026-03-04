@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -13,9 +13,19 @@ from dotenv import load_dotenv
 import httpx
 import json
 import asyncio
+import logging
+import uuid
+import time
 
 # Load environment variables
 load_dotenv()
+
+# Structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='{"time": "%(asctime)s", "level": "%(levelname)s", "name": "%(name)s", "message": "%(message)s"}'
+)
+logger = logging.getLogger("iuc02")
 
 app = FastAPI(
     title="IUC02 Validation API",
@@ -23,22 +33,59 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Structured request/response logging with request-id and latency."""
+    req_id = str(uuid.uuid4())[:8]
+    start = time.monotonic()
+    logger.info(
+        "[%s] --> %s %s  ip=%s",
+        req_id, request.method, request.url.path,
+        request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown"),
+    )
+    response = await call_next(request)
+    elapsed = time.monotonic() - start
+    logger.info("[%s] <-- %s %s  status=%d latency=%.3fs",
+                req_id, request.method, request.url.path, response.status_code, elapsed)
+    response.headers["X-Request-Id"] = req_id
+    return response
+
+# Configure CORS – origins from env to avoid hard-coding in production
+_allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://iuc-02-demonstrator.vercel.app",
+]
+_extra = os.getenv("FRONTEND_URL", "")
+if _extra:
+    _allowed_origins.append(_extra)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "https://iuc-02-demonstrator.vercel.app", 
-        os.getenv("FRONTEND_URL", "")  # Production frontend URL
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
+    max_age=600,
 )
 
 # Data directory path
 DATA_DIR = Path(__file__).parent / "data"
+
+# Allowlist of files that may be served via the API (prevents path traversal)
+ALLOWED_FILES = {
+    "2024-09_Schema_IUC02_v1.json",
+    "mapping document.json",
+    "rdfGraph_smallExample.ttl",
+    "shaclShape_smallExample.ttl",
+    "Vh5205_C-95_translated.json",
+    "Vh5205_C-95.LIS",
+}
+
+# Upload size limits
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024   # 2 MB per file upload
+MAX_RDF_CHARS   = 500_000            # approx 500 KB text content
+ALLOWED_MIME_TYPES = {"text/plain", "application/octet-stream", "text/turtle"}
 
 class ValidationRequest(BaseModel):
     rdf_content: str
@@ -65,13 +112,34 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check that also probes optional external dependencies."""
+    checks: dict = {"status": "healthy", "dependencies": {}}
+
+    # Check OpenAI key is present (no live call to avoid cost)
+    checks["dependencies"]["openai_key"] = "configured" if os.getenv("OPENAI_API_KEY") else "missing"
+
+    # Confirm data directory is accessible
+    checks["dependencies"]["data_dir"] = "ok" if DATA_DIR.exists() else "missing"
+
+    if os.getenv("OPENAI_API_KEY") is None or not DATA_DIR.exists():
+        checks["status"] = "degraded"
+
+    logger.info("Health check: %s", checks)
+    return checks
 
 @app.post("/api/validate")
 async def validate_rdf(request: ValidationRequest):
     """
     Validate RDF data against SHACL shapes
     """
+    # Guard against excessively large inputs
+    if len(request.rdf_content) > MAX_RDF_CHARS or len(request.shacl_content) > MAX_RDF_CHARS:
+        raise HTTPException(status_code=413, detail="Input too large. Maximum 500 KB per graph.")
+
+    request_id = str(uuid.uuid4())[:8]
+    start = time.monotonic()
+    logger.info("[%s] /api/validate started – rdf=%d chars shacl=%d chars",
+                request_id, len(request.rdf_content), len(request.shacl_content))
     try:
         # Parse RDF data
         data_graph = Graph()
@@ -107,6 +175,8 @@ async def validate_rdf(request: ValidationRequest):
                 "object": str(o)
             })
         
+        elapsed = time.monotonic() - start
+        logger.info("[%s] /api/validate done – conforms=%s latency=%.2fs", request_id, conforms, elapsed)
         return {
             "conforms": conforms,
             "report_text": results_text,
@@ -114,17 +184,32 @@ async def validate_rdf(request: ValidationRequest):
             "json_ld": json_ld
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error("[%s] /api/validate error: %s", request_id, e)
         raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
 
 @app.get("/api/files/{filename}")
 async def get_file(filename: str):
     """
-    Get content of a file from the data directory
+    Get content of a file from the data directory.
+    Only files in the ALLOWED_FILES allowlist can be served.
     """
+    # Prevent path traversal: reject any filename that contains path separators
+    # or is not in the explicit allowlist.
+    if filename not in ALLOWED_FILES:
+        logger.warning("Blocked file request for '%s' (not in allowlist)", filename)
+        raise HTTPException(status_code=404, detail="File not found")
+
     try:
         file_path = DATA_DIR / filename
-        
+        # Verify the resolved path is still inside DATA_DIR
+        resolved = file_path.resolve()
+        if not str(resolved).startswith(str(DATA_DIR.resolve())):
+            logger.error("Path traversal attempt blocked for '%s'", filename)
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
         
@@ -168,31 +253,62 @@ async def list_files():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/files/download")
-async def download_file(file_content: FileContent, filename: str):
+async def download_file(
+    file_content: FileContent,
+    filename: str,
+    background_tasks: BackgroundTasks,
+):
     """
-    Create a downloadable file from content
+    Create a downloadable file from content.
+    The temp file is removed from disk after the response is sent.
     """
+    # Basic name sanitisation – allow only safe characters in the download name
+    safe_name = Path(filename).name
+    if not safe_name or any(c in safe_name for c in ("/", "\\", "..:")):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     try:
         # Create a temporary file
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=f"_{filename}") as tmp_file:
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=f"_{safe_name}") as tmp_file:
             tmp_file.write(file_content.content)
             tmp_file_path = tmp_file.name
-        
+
+        def _cleanup(path: str) -> None:
+            try:
+                os.unlink(path)
+                logger.info("Temp file cleaned up: %s", path)
+            except OSError:
+                pass
+
+        background_tasks.add_task(_cleanup, tmp_file_path)
+
         return FileResponse(
             tmp_file_path,
             media_type='application/octet-stream',
-            filename=filename
+            filename=safe_name,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/parse-rdf")
 async def parse_rdf(file: UploadFile = File(...)):
     """
-    Parse and validate RDF file syntax
+    Parse and validate RDF file syntax.
+    Enforces a 2 MB size cap to prevent resource exhaustion.
     """
     try:
-        content = await file.read()
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_BYTES // 1024} KB.",
+            )
+        # Validate MIME type if provided by client
+        if file.content_type and file.content_type not in ALLOWED_MIME_TYPES:
+            logger.warning("Rejected upload with MIME type '%s'", file.content_type)
+            raise HTTPException(status_code=415, detail="Unsupported file type. Upload a Turtle (.ttl) file.")
         content_str = content.decode('utf-8')
         
         # Try to parse the RDF
