@@ -78,9 +78,31 @@ export async function POST(request: NextRequest) {
 
     if (cachedResponse) {
       console.log("✅ CACHE HIT - Returning cached response");
-      return NextResponse.json({
-        message: cachedResponse,
-        cached: true,
+      // Return cached response in streaming format for consistency
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          // Send the full cached message
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ 
+                content: cachedResponse, 
+                fullMessage: cachedResponse, 
+                cached: true,
+                done: true 
+              })}\n\n`
+            )
+          );
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
       });
     }
 
