@@ -4,7 +4,8 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 import pyshacl
-from rdflib import Graph
+from rdflib import Graph, URIRef, Literal, BNode
+import networkx as nx
 import os
 import tempfile
 from pathlib import Path
@@ -189,6 +190,78 @@ async def validate_rdf(request: ValidationRequest):
     except Exception as e:
         logger.error("[%s] /api/validate error: %s", request_id, e)
         raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+
+@app.post("/api/rdf-graph")
+async def get_rdf_graph(request: ValidationRequest):
+    """
+    Parse RDF data and return graph structure (nodes and edges) using networkx.
+    Only URI-to-URI relationships are returned as edges; literals become node attributes.
+    """
+    if len(request.rdf_content) > MAX_RDF_CHARS:
+        raise HTTPException(status_code=413, detail="Input too large. Maximum 500 KB.")
+
+    try:
+        data_graph = Graph()
+        data_graph.parse(data=request.rdf_content, format="turtle")
+
+        G = nx.DiGraph()
+
+        def local_name(term) -> str:
+            s = str(term)
+            if "#" in s:
+                return s.split("#")[-1]
+            if "/" in s:
+                return s.split("/")[-1]
+            return s[:60]
+
+        for s, p, o in data_graph:
+            s_id = str(s)
+            p_label = local_name(p)
+
+            # Determine subject node type
+            s_type = "blank" if isinstance(s, BNode) else "uri"
+            if s_id not in G:
+                G.add_node(s_id, label=local_name(s), node_type=s_type)
+
+            if isinstance(o, Literal):
+                # Represent literals as lightweight leaf nodes
+                o_id = f"lit::{p_label}::{str(o)[:60]}"
+                if o_id not in G:
+                    G.add_node(o_id, label=str(o)[:60], node_type="literal")
+                G.add_edge(s_id, o_id, label=p_label)
+            elif isinstance(o, BNode):
+                o_id = str(o)
+                if o_id not in G:
+                    G.add_node(o_id, label=f"_:{o_id[:8]}", node_type="blank")
+                G.add_edge(s_id, o_id, label=p_label)
+            else:  # URIRef
+                o_id = str(o)
+                if o_id not in G:
+                    G.add_node(o_id, label=local_name(o), node_type="uri")
+                G.add_edge(s_id, o_id, label=p_label)
+
+        nodes = [
+            {"id": nid, "label": data.get("label", nid), "node_type": data.get("node_type", "uri")}
+            for nid, data in G.nodes(data=True)
+        ]
+        edges = [
+            {"source": u, "target": v, "label": d.get("label", "")}
+            for u, v, d in G.edges(data=True)
+        ]
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("/api/rdf-graph error: %s", e)
+        raise HTTPException(status_code=400, detail=f"Error building RDF graph: {str(e)}")
+
 
 @app.get("/api/files/{filename}")
 async def get_file(filename: str):
