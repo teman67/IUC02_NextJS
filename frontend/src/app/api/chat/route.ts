@@ -172,7 +172,7 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
         model: "gpt-4o-mini",
         messages: [systemMessage, ...limitedMessages],
         temperature: 0.7,
-        max_tokens: 500,
+        max_tokens: 2000,
         stream: true, // Enable streaming
         user: ip.substring(0, 50), // OpenAI user identifier for abuse monitoring
       }),
