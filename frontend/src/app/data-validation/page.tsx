@@ -1,9 +1,16 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { RdfGraphData } from "@/components/RdfGraphVisualization";
+
+const RdfGraphVisualization = dynamic(
+  () => import("@/components/RdfGraphVisualization"),
+  { ssr: false }
+);
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -36,6 +43,8 @@ export default function DataValidationPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [rdfGraphData, setRdfGraphData] = useState<RdfGraphData | null>(null);
+  const [loadingGraph, setLoadingGraph] = useState(false);
 
   const showToast = useCallback(
     (message: string, type: 'success' | 'info' | 'warning' = 'success') => {
@@ -87,12 +96,29 @@ export default function DataValidationPage() {
     setAiAnalysis(null); // Reset AI analysis when revalidating
     setFixedRdf(null); // Reset fixed RDF when revalidating
     setProgressLog([]); // Clear progress log
+    setRdfGraphData(null); // Reset graph when revalidating
     try {
       const response = await axios.post(`${API_URL}/api/validate`, {
         rdf_content: rdfContent,
         shacl_content: shaclContent,
       });
       setValidationResult(response.data);
+
+      // If validation passes, fetch the RDF graph for visualization
+      if (response.data.conforms) {
+        setLoadingGraph(true);
+        try {
+          const graphResponse = await axios.post(`${API_URL}/api/rdf-graph`, {
+            rdf_content: rdfContent,
+            shacl_content: shaclContent,
+          });
+          setRdfGraphData(graphResponse.data);
+        } catch (graphErr) {
+          console.error("Failed to load RDF graph data:", graphErr);
+        } finally {
+          setLoadingGraph(false);
+        }
+      }
     } catch (error: any) {
       alert(
         `Validation failed: ${error.response?.data?.detail || error.message}`
@@ -524,6 +550,29 @@ export default function DataValidationPage() {
               </div>
             </div>
           </div>
+
+          {/* RDF Graph Visualization — shown only when validation passes */}
+          {validationResult.conforms && (
+            <div className="card bg-gradient-to-br from-indigo-50 to-slate-50 border-2 border-indigo-300 animate-slide-up">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-4xl">🕸️</span>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">RDF Data Graph</h3>
+                  <p className="text-sm text-gray-600">
+                    Interactive force-directed graph of the validated RDF data
+                  </p>
+                </div>
+              </div>
+              {loadingGraph ? (
+                <div className="flex items-center gap-3 py-10 justify-center text-indigo-600">
+                  <span className="animate-spin text-2xl">⚙️</span>
+                  <span className="font-medium">Building graph with NetworkX…</span>
+                </div>
+              ) : rdfGraphData ? (
+                <RdfGraphVisualization graphData={rdfGraphData} />
+              ) : null}
+            </div>
+          )}
 
           <div className="card">
             <h3 className="text-2xl font-bold mb-4 text-gray-900 flex items-center gap-2">
