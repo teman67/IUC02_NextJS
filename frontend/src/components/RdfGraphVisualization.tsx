@@ -54,6 +54,16 @@ export default function RdfGraphVisualization({ graphData }: Props) {
     new Set(["uri", "literal", "blank"])
   );
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const mousePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Track real mouse position for tooltip placement
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      mousePos.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener("mousemove", handler);
+    return () => window.removeEventListener("mousemove", handler);
+  }, []);
 
   // Dynamic import (browser only)
   useEffect(() => {
@@ -90,9 +100,9 @@ export default function RdfGraphVisualization({ graphData }: Props) {
     }),
   };
 
-  const handleNodeHover = useCallback((node: GraphNode | null, event?: MouseEvent) => {
-    if (node && event) {
-      setTooltip({ text: node.id, x: event.clientX, y: event.clientY });
+  const handleNodeHover = useCallback((node: GraphNode | null) => {
+    if (node) {
+      setTooltip({ text: node.id, x: mousePos.current.x, y: mousePos.current.y });
     } else {
       setTooltip(null);
     }
