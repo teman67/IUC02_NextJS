@@ -195,15 +195,84 @@
     @apply bg-white/30 backdrop-blur-md border border-white/20;
   }
   
-  .animate-delay-100 {
-    animation-delay: 100ms;
+  .animate-delay-100 { animation-delay: 100ms; }
+  .animate-delay-200 { animation-delay: 200ms; }
+  .animate-delay-300 { animation-delay: 300ms; }
+  .animate-delay-400 { animation-delay: 400ms; }
+  .animate-delay-500 { animation-delay: 500ms; }
+  .animate-delay-600 { animation-delay: 600ms; }
+  .animate-delay-700 { animation-delay: 700ms; }
+  .animate-delay-1000 { animation-delay: 1000ms; }
+
+  /* Animated gradient text */
+  .animate-gradient-text {
+    background-size: 200% 200%;
+    @apply bg-gradient-to-r from-primary-500 via-accent-purple to-accent-pink bg-clip-text text-transparent;
+    animation: gradientX 4s ease infinite;
   }
-  
-  .animate-delay-200 {
-    animation-delay: 200ms;
+
+  /* Reveal on scroll utility */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  
-  .animate-delay-300 {
-    animation-delay: 300ms;
+
+  .reveal.in-view {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .reveal-left {
+    opacity: 0;
+    transform: translateX(-32px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .reveal-left.in-view {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  .reveal-right {
+    opacity: 0;
+    transform: translateX(32px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .reveal-right.in-view {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  /* Glowing animated border on cards */
+  .card-glow {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .card-glow::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    background: conic-gradient(from 180deg, #0ea5e9, #8b5cf6, #ec4899, #0ea5e9);
+    opacity: 0;
+    transition: opacity 0.4s;
+    z-index: -1;
+    animation: spin 4s linear infinite;
+  }
+
+  .card-glow:hover::before {
+    opacity: 1;
+  }
+
+  /* Orb blur shapes */
+  .orb {
+    border-radius: 50%;
+    filter: blur(70px);
+    position: absolute;
+    pointer-events: none;
+    will-change: transform;
   }
 }
