@@ -176,6 +176,11 @@ python -m venv backend
 # Install dependencies
 pip install -r requirements.txt
 
+# Configure environment variables
+# Create .env file and add your OpenAI API key:
+# OPENAI_API_KEY=your_openai_api_key_here
+# Get your key from: https://platform.openai.com/api-keys
+
 # Run the backend server
 uvicorn main:app --reload --port 8000
 ```
@@ -240,6 +245,12 @@ The frontend application will be available at `http://localhost:3000`
    - Conformance status (✅ Valid / ❌ Invalid)
    - Detailed validation report
    - JSON-LD representation of the data graph
+5. **NEW:** Click **"🤖 Analyze with AI"** button to get:
+   - Plain-language explanation of validation results
+   - Specific issues found and why they occurred
+   - Actionable recommendations for fixing violations
+   - Code examples showing how to correct issues
+   - Powered by GPT-4o mini for intelligent analysis
 
 ### API Documentation
 
@@ -249,6 +260,7 @@ Available endpoints:
 - `GET /` - API health check
 - `GET /api/health` - Detailed health status
 - `POST /api/validate` - Validate RDF against SHACL shapes
+- `POST /api/analyze-validation` - **NEW:** Get AI-powered analysis of validation results
 - `GET /api/files/{filename}` - Retrieve file content from data directory
 - `GET /api/files` - List all available files
 
@@ -267,6 +279,7 @@ Available endpoints:
 - **Language**: Python 3.9+
 - **RDF Processing**: rdflib 7.0.0
 - **SHACL Validation**: pyshacl 0.25.0
+- **AI Integration**: OpenAI API (GPT-4o-mini) for validation analysis
 - **Data Validation**: Pydantic
 - **Server**: Uvicorn
 
