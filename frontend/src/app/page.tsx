@@ -48,10 +48,7 @@ export default function Home() {
   const [wordVisible, setWordVisible] = useState(true)
 
   const { ref: featuresRef, inView: featuresVisible } = useInView()
-  const { ref: statsRef, inView: statsVisible } = useInView(0.3)
   const { ref: ctaRef, inView: ctaVisible } = useInView(0.2)
-
-  const fairCount = useCountUp(100, 1800, statsVisible)
 
   useEffect(() => {
     const t = setTimeout(() => setHeroVisible(true), 100)
@@ -104,14 +101,14 @@ export default function Home() {
   return (
     <div className="min-h-screen">
       {/* ── Hero ─────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden py-20 md:py-32">
-        {/* Soft gradient backdrop */}
-        <div className="absolute inset-0 bg-gradient-to-br from-primary-500/10 via-purple-500/10 to-pink-500/10 animate-pulse-subtle" />
-
-        {/* Floating blurred orbs */}
-        <div className="orb w-96 h-96 bg-primary-400/20 top-[-80px] left-[-80px] animate-float" />
-        <div className="orb w-72 h-72 bg-purple-400/20 bottom-[-40px] right-[-40px] animate-float-delayed" />
-        <div className="orb w-56 h-56 bg-pink-400/15 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-float-slow" />
+      <section className="relative py-20 md:py-32">
+        {/* Aurora color-shift mesh blobs */}
+        <div className="absolute rounded-full pointer-events-none blur-[100px] w-[540px] h-[540px] bg-sky-400/30 top-[-140px] left-[-120px] animate-float" />
+        <div className="absolute rounded-full pointer-events-none blur-[100px] w-[500px] h-[500px] bg-violet-400/30 bottom-[-110px] right-[-110px] animate-float-delayed" />
+        <div className="absolute rounded-full pointer-events-none blur-[80px] w-96 h-96 bg-rose-400/25 top-1/3 right-1/4 animate-float-slow" />
+        <div className="absolute rounded-full pointer-events-none blur-[80px] w-80 h-80 bg-cyan-400/25 bottom-1/3 left-1/3 animate-float" style={{animationDelay: '4s'}} />
+        <div className="absolute rounded-full pointer-events-none blur-[70px] w-72 h-72 bg-emerald-400/20 top-2/3 -left-16 animate-float-delayed" style={{animationDelay: '2s'}} />
+        <div className="absolute rounded-full pointer-events-none blur-[70px] w-64 h-64 bg-amber-400/20 top-10 right-1/3 animate-float-slow" style={{animationDelay: '6s'}} />
 
         {/* Spinning decorative rings (desktop only) */}
         <div className="absolute top-16 right-16 w-32 h-32 rounded-full border border-primary-300/30 animate-spin-slow hidden lg:block" />
@@ -126,7 +123,7 @@ export default function Home() {
           {/* Badge with pulsing ring */}
           <div className="inline-flex items-center justify-center relative mb-8">
             <div className="absolute inset-0 rounded-full bg-primary-400/20 animate-ping-slow" />
-            <div className="relative px-6 py-2 bg-gradient-to-r from-primary-500/20 to-purple-500/20 rounded-full border border-primary-300 backdrop-blur-sm">
+            <div className="relative px-6 py-2 bg-gradient-to-r from-primary-500/20 to-purple-500/20 rounded-full backdrop-blur-sm">
               <span className="text-primary-700 font-semibold text-sm md:text-base">
                 NFDI-MatWerk IUC02
               </span>
@@ -244,50 +241,10 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Stats ─────────────────────────────────────────────── */}
-      <section className="max-w-7xl mx-auto px-6 py-16" ref={statsRef}>
-        <div
-          className={`card bg-gradient-to-br from-primary-600 via-purple-600 to-pink-600 text-white transition-all duration-700 ${
-            statsVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
-          }`}
-        >
-          <div className="grid md:grid-cols-3 gap-12 text-center">
-            <div
-              className={`group hover:scale-110 transition-all duration-700 ${
-                statsVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-              }`}
-            >
-              <div className="text-5xl md:text-6xl font-bold mb-2 drop-shadow-lg tabular-nums">
-                {fairCount}%
-              </div>
-              <div className="text-lg md:text-xl opacity-90">FAIR Compliant</div>
-            </div>
-
-            <div
-              className={`group hover:scale-110 transition-all duration-700 delay-200 ${
-                statsVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-              }`}
-            >
-              <div className="text-5xl md:text-6xl font-bold mb-2 drop-shadow-lg">∞</div>
-              <div className="text-lg md:text-xl opacity-90">Data Quality</div>
-            </div>
-
-            <div
-              className={`group hover:scale-110 transition-all duration-700 delay-400 ${
-                statsVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-              }`}
-            >
-              <div className="text-5xl md:text-6xl font-bold mb-2 drop-shadow-lg">24/7</div>
-              <div className="text-lg md:text-xl opacity-90">Accessibility</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       {/* ── CTA ───────────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-6 py-20 text-center" ref={ctaRef}>
         <div
-          className={`card bg-gradient-to-br from-gray-50 to-blue-50 border-2 border-primary-200 transition-all duration-700 ${
+          className={`card bg-gradient-to-br from-gray-50 to-blue-50 transition-all duration-700 ${
             ctaVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
           }`}
         >

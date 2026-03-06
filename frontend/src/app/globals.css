@@ -8,11 +8,22 @@
   }
   
   body {
-    @apply text-gray-900 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50;
+    @apply text-gray-900;
     font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background: linear-gradient(
+      -45deg,
+      #f0f9ff,
+      #ede9fe,
+      #fce7f3,
+      #d1fae5,
+      #cffafe,
+      #f0f9ff
+    );
+    background-size: 400% 400%;
     background-attachment: fixed;
+    animation: auroraShift 16s ease-in-out infinite;
   }
   
   body::before {
@@ -76,7 +87,7 @@
 
   .card {
     @apply bg-white/80 backdrop-blur-sm rounded-2xl shadow-medium p-8 transition-all duration-500;
-    @apply hover:shadow-hard hover:bg-white/90 border border-gray-100;
+    @apply hover:shadow-hard hover:bg-white/90;
   }
 
   .btn-primary {
@@ -275,4 +286,12 @@
     pointer-events: none;
     will-change: transform;
   }
+}
+
+@keyframes auroraShift {
+  0%   { background-position: 0% 50%; }
+  25%  { background-position: 100% 0%; }
+  50%  { background-position: 100% 100%; }
+  75%  { background-position: 0% 100%; }
+  100% { background-position: 0% 50%; }
 }
