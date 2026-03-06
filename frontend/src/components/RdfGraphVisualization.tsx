@@ -1,4 +1,4 @@
-"use client";
+ "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
 
@@ -71,6 +71,14 @@ export default function RdfGraphVisualization({ graphData }: Props) {
       setForceGraph(() => mod.default);
     });
   }, []);
+
+  // Spread nodes out via d3 force configuration
+  useEffect(() => {
+    if (!fgRef.current) return;
+    fgRef.current.d3Force("charge")?.strength(-400);
+    fgRef.current.d3Force("link")?.distance(120);
+    fgRef.current.d3ReheatSimulation?.();
+  }, [ForceGraph]);
 
   // Responsive width
   useEffect(() => {
