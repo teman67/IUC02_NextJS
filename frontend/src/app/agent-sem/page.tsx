@@ -371,7 +371,7 @@ export default function AgentSemPage() {
   // accumulated step data
   const [steps, setSteps] = useState<StepEvent[]>([]);
   const [finalResult, setFinalResult] = useState<FinalResult | null>(null);
-  const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; links: GraphLink[] } | null>(null);
+  const [graphHtml, setGraphHtml] = useState<string | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState("");
 
@@ -391,23 +391,22 @@ export default function AgentSemPage() {
   useEffect(() => {
     progressEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [progressLog]);
-  // ── fetch graph data when final RDF arrives ───────────────────────────
+  // ── fetch graph HTML when final RDF arrives ───────────────────────────
   useEffect(() => {
     if (!finalResult?.rdf) return;
     setGraphLoading(true);
     setGraphError("");
-    fetch(`${API_URL}/api/agent-sem/parse-graph`, {
+    fetch(`${API_URL}/api/agent-sem/graph-html`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rdf: finalResult.rdf }),
     })
       .then(async (r) => {
         if (!r.ok) throw new Error(`Server returned ${r.status} — restart the backend and try again.`);
-        return r.json();
+        return r.text();
       })
-      .then((data) => {
-        if (!Array.isArray(data?.nodes)) throw new Error("Unexpected graph response from server.");
-        setGraphData(data);
+      .then((html) => {
+        setGraphHtml(html);
         setGraphLoading(false);
         setActiveTab("graph");
       })
@@ -462,7 +461,7 @@ export default function AgentSemPage() {
     setProgressLog([]);
     setSteps([]);
     setFinalResult(null);
-    setGraphData(null);
+    setGraphHtml(null);
     setGraphError("");
     setActiveTab("process");
     setActivePhase("");
@@ -523,6 +522,9 @@ export default function AgentSemPage() {
             } else if (event.type === "step") {
               setSteps((prev) => [...prev, event as StepEvent]);
               addLog("step", `✓ ${event.step}`);
+              if (event.step === "validation") {
+                setActiveTab("validation");
+              }
             } else if (event.type === "final") {
               setFinalResult(event as FinalResult);
               addLog("done", event.conforms ? "✅ Validation PASSED" : "⚠️ Validation FAILED");
@@ -563,6 +565,7 @@ export default function AgentSemPage() {
   const ontologyMatchStep = steps.find((s) => s.step === "ontology_matching");
   const ontologyReplaceStep = steps.find((s) => s.step === "ontology_replacement");
   const initialGenStep = steps.find((s) => s.step === "initial_generation");
+  const validationStep = steps.find((s) => s.step === "validation");
 
   const isRunning = phase === "running" || phase === "validating_key";
 
@@ -854,7 +857,14 @@ export default function AgentSemPage() {
                 {/* Validation tab */}
                 {activeTab === "validation" && (
                   <div className="space-y-4">
-                    {correctionSteps.length === 0 && finalResult && (
+                    {validationStep && correctionSteps.length === 0 && (
+                      <div className={`p-3 rounded-lg text-sm ${(validationStep.conforms as boolean) ? "bg-green-900/40 text-green-300" : "bg-yellow-900/40 text-yellow-300"}`}>
+                        {(validationStep.conforms as boolean)
+                          ? "✅ Validation passed with no correction needed."
+                          : "⚠️ Validation failed — running corrections..."}
+                      </div>
+                    )}
+                    {correctionSteps.length === 0 && finalResult && !validationStep && (
                       <div className={`p-3 rounded-lg text-sm ${finalResult.conforms ? "bg-green-900/40 text-green-300" : "bg-yellow-900/40 text-yellow-300"}`}>
                         {finalResult.conforms
                           ? "✅ Validation passed with no correction needed."
@@ -943,8 +953,14 @@ export default function AgentSemPage() {
                     {graphError && (
                       <div className="text-red-300 text-sm bg-red-900/30 rounded-xl p-3">⚠️ {graphError}</div>
                     )}
-                    {!graphLoading && !graphError && graphData ? (
-                      <RDFGraphView graph={graphData} />
+                    {!graphLoading && !graphError && graphHtml ? (
+                      <iframe
+                        srcDoc={graphHtml}
+                        className="w-full rounded-xl border border-white/10"
+                        style={{ height: "620px" }}
+                        title="RDF Graph"
+                        sandbox="allow-scripts"
+                      />
                     ) : !graphLoading && !graphError && (
                       <p className="text-gray-400 text-sm">
                         {isRunning ? "Graph will appear when pipeline finishes." : "Run the pipeline to see the RDF graph."}
