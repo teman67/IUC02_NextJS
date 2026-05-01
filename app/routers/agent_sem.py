@@ -11,6 +11,7 @@ from app.dependencies import limiter
 from app.models import AgentSemRequest, AgentSemValidateKeyRequest, ParseGraphRequest
 from app.services.agent_sem_service import (
     get_example_content,
+    generate_graph_html,
     rdf_to_graph_data,
     run_pipeline,
     validate_api_key,
@@ -61,6 +62,16 @@ async def parse_graph(body: ParseGraphRequest):
         return {"nodes": [], "links": []}
     data = await asyncio.to_thread(rdf_to_graph_data, body.rdf)
     return data
+
+
+@router.post("/graph-html")
+async def graph_html(body: ParseGraphRequest):
+    """Parse RDF Turtle and return a pyvis interactive HTML graph."""
+    from fastapi.responses import HTMLResponse
+    if not body.rdf.strip():
+        return HTMLResponse(content="<p>No RDF provided.</p>")
+    html = await asyncio.to_thread(generate_graph_html, body.rdf)
+    return HTMLResponse(content=html)
 
 
 @router.post("/generate-stream")

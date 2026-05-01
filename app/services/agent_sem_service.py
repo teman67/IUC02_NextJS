@@ -124,6 +124,110 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
     return {"nodes": nodes, "links": links}
 
 
+def generate_graph_html(rdf_code: str) -> str:
+    """Generate a pyvis interactive HTML graph from RDF Turtle, matching the Streamlit visualization."""
+    try:
+        import networkx as nx
+        from pyvis.network import Network
+    except ImportError:
+        return "<p style='color:red'>pyvis or networkx is not installed.</p>"
+
+    try:
+        g = Graph().parse(data=rdf_code, format="turtle")
+    except Exception as exc:
+        return f"<p style='color:red'>Error parsing RDF: {exc}</p>"
+
+    nx_graph = nx.DiGraph()
+    for s, p, o in g:
+        # Skip triples where either subject or object is a blank node
+        if isinstance(s, BNode) or isinstance(o, BNode):
+            continue
+        nx_graph.add_edge(str(s), str(o), label=str(p))
+
+    net = Network(height="600px", width="100%", directed=True, notebook=False)
+    net.barnes_hut(gravity=-8000, central_gravity=0.2, spring_length=250, spring_strength=0.03, damping=0.09)
+
+    for node in nx_graph.nodes:
+        short_label = node.split("/")[-1] if "/" in node else node
+        short_label = short_label.split("#")[-1] if "#" in short_label else short_label
+
+        if "Class" in node:
+            node_color = "#FFD700"
+            shape = "box"
+            icon = "📦"
+        elif "Property" in node or "predicate" in node:
+            node_color = "#8FBC8F"
+            shape = "ellipse"
+            icon = "🔗"
+        else:
+            node_color = "#87CEEB"
+            shape = "ellipse"
+            icon = ""
+
+        label = f"{icon} {short_label}".strip() if short_label else ""
+        net.add_node(
+            node,
+            label=label,
+            title=node,
+            shape=shape,
+            color=node_color,
+            size=25,
+            font={"size": 18},
+            shadow=True,
+        )
+
+    for u, v, d in nx_graph.edges(data=True):
+        edge_label = d["label"].split("/")[-1] if "/" in d["label"] else d["label"]
+        edge_label = edge_label.split("#")[-1] if "#" in edge_label else edge_label
+        net.add_edge(
+            u, v,
+            label=edge_label,
+            font={"size": 14, "align": "middle"},
+            width=2,
+            arrows="to",
+            title=d["label"],
+            color="#999",
+        )
+
+    net.set_options("""
+    const options = {
+        "nodes": {
+            "borderWidth": 2,
+            "shadow": true,
+            "scaling": {"min": 10, "max": 30},
+            "font": {"size": 16, "face": "arial"}
+        },
+        "edges": {
+            "color": {"inherit": false},
+            "smooth": true,
+            "arrows": {"to": {"enabled": true, "scaleFactor": 0.6}}
+        },
+        "physics": {
+            "enabled": true,
+            "barnesHut": {
+                "gravitationalConstant": -8000,
+                "centralGravity": 0.2,
+                "springLength": 200,
+                "springConstant": 0.04,
+                "damping": 0.09
+            },
+            "stabilization": {"enabled": true, "iterations": 150}
+        },
+        "interaction": {
+            "hover": true,
+            "tooltipDelay": 100,
+            "navigationButtons": true,
+            "keyboard": true,
+            "multiselect": true,
+            "zoomView": true
+        },
+        "layout": {"improvedLayout": true}
+    }
+    """)
+
+    return net.generate_html()
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -429,7 +533,12 @@ class CritiqueAgent:
             f"RDF:\n{rdf_code}\n\nSHACL:\n{shacl_code}\n\n"
             "Focus on semantic coherence, ontology alignment, completeness, and SHACL quality."
         )
-        return call_llm(prompt, "You are a SHACL and RDF critique expert.", self.model_info)
+        system = (
+            "You are a SHACL and RDF critique expert. "
+            "Respond only with specific, structured critique points and improvement suggestions. "
+            "Do NOT include conversational text, offers to convert formats, or any prose unrelated to the critique."
+        )
+        return call_llm(prompt, system, self.model_info)
 
 
 class OntologyMapperAgent:
@@ -437,8 +546,19 @@ class OntologyMapperAgent:
         self.model_info = model_info
 
     def run(self, user_input: str) -> str:
-        prompt = f"Suggest ontology mappings for the following materials science data:\n{user_input}"
-        return call_llm(prompt, "You are a materials science ontology assistant.", self.model_info)
+        prompt = (
+            "List ontology term mappings for the materials science concepts found in the data below.\n"
+            "Format: a markdown table with columns: | Term | Suggested Ontology URI | Ontology Name |\n"
+            "Only output the table. No introduction, no explanation, no offers, no conclusion.\n\n"
+            f"DATA:\n{user_input}"
+        )
+        system = (
+            "You are a materials science ontology expert. "
+            "Output ONLY a markdown table mapping data terms to ontology URIs. "
+            "Do not write any text before or after the table. "
+            "Do not offer alternatives, ask questions, or include any conversational text."
+        )
+        return call_llm(prompt, system, self.model_info)
 
 
 class CorrectionAgent:
