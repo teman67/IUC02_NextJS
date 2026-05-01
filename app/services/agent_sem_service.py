@@ -130,7 +130,7 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 ONTOLOGY_DIR = _PROJECT_ROOT / "Streamlit_app" / "ontologies"
-EXAMPLE_FILE = _PROJECT_ROOT / "Streamlit_app" / "BAM_Creep.txt"
+EXAMPLE_FILE = _PROJECT_ROOT / "BAM_Creep.txt"
 
 
 def get_example_content() -> str:
