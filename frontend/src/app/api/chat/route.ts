@@ -171,8 +171,8 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
         body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [systemMessage, ...limitedMessages],
-        temperature: 0.7,
-        max_tokens: 2000,
+        temperature: 0.2,
+        max_tokens: 4000,
         stream: true, // Enable streaming
         user: ip.substring(0, 50), // OpenAI user identifier for abuse monitoring
       }),

@@ -16,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 from app.config import CORS_ORIGINS, DATA_DIR
 from app.dependencies import limiter
 from app.middleware import register_middleware
-from app.routers import ai, files, validation
+from app.routers import ai, agent_sem, files, validation
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -59,6 +59,7 @@ register_middleware(app)
 app.include_router(files.router)
 app.include_router(validation.router)
 app.include_router(ai.router)
+app.include_router(agent_sem.router)
 
 
 # ---------------------------------------------------------------------------

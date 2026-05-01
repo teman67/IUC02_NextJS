@@ -32,6 +32,7 @@ export default function Navigation() {
     { href: "/workflow", label: "Workflow" },
     { href: "/data-generation", label: "Data Generation" },
     { href: "/data-validation", label: "Data Validation" },
+    { href: "/agent-sem", label: "AgentSem" },
     { href: "/about", label: "About Us" },
   ];
 

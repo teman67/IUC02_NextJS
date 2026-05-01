@@ -131,6 +131,8 @@
     @apply text-3xl md:text-5xl font-bold mb-8;
     @apply bg-gradient-to-r from-primary-600 via-accent-purple to-primary-800 bg-clip-text text-transparent;
     @apply animate-fade-in;
+    line-height: 1.25;
+    padding-bottom: 0.15em;
   }
   
   .warning-banner {
