@@ -358,6 +358,7 @@ export default function AgentSemPage() {
   // input
   const [inputText, setInputText] = useState("");
   const [useExample, setUseExample] = useState(false);
+  const [exampleLoading, setExampleLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // pipeline state
@@ -417,6 +418,7 @@ export default function AgentSemPage() {
   }, [finalResult?.rdf]);
   // ── load example ──────────────────────────────────────────────────────────
   const loadExample = useCallback(async () => {
+    setExampleLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/agent-sem/example`);
       if (!res.ok) throw new Error("Not found");
@@ -424,6 +426,8 @@ export default function AgentSemPage() {
       setInputText(data.content);
     } catch {
       setInputText("(Could not load example file from backend.)");
+    } finally {
+      setExampleLoading(false);
     }
   }, []);
 
@@ -700,10 +704,32 @@ export default function AgentSemPage() {
                   type="checkbox"
                   checked={useExample}
                   onChange={(e) => setUseExample(e.target.checked)}
-                  disabled={isRunning}
+                  disabled={isRunning || exampleLoading}
                   className="accent-primary-500"
                 />
                 Use example (BAM creep test)
+                {exampleLoading && (
+                  <svg
+                    className="animate-spin h-4 w-4 text-primary-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    />
+                  </svg>
+                )}
               </label>
             </div>
             <textarea
