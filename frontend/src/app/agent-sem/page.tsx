@@ -970,7 +970,7 @@ export default function AgentSemPage() {
                       <iframe
                         srcDoc={graphHtml}
                         className="w-full rounded-xl border border-white/10"
-                        style={{ height: "620px" }}
+                        style={{ height: "700px" }}
                         title="RDF Graph"
                         sandbox="allow-scripts"
                       />
