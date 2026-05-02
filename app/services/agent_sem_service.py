@@ -125,7 +125,7 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
 
 
 def generate_graph_html(rdf_code: str) -> str:
-    """Generate a pyvis interactive HTML graph from RDF Turtle, matching the Streamlit visualization."""
+    """Generate a pyvis interactive HTML graph from RDF Turtle with dark-themed, namespace-coloured visuals."""
     try:
         import networkx as nx
         from pyvis.network import Network
@@ -137,85 +137,133 @@ def generate_graph_html(rdf_code: str) -> str:
     except Exception as exc:
         return f"<p style='color:red'>Error parsing RDF: {exc}</p>"
 
+    # Build directed graph, skipping blank nodes
     nx_graph = nx.DiGraph()
     for s, p, o in g:
-        # Skip triples where either subject or object is a blank node
         if isinstance(s, BNode) or isinstance(o, BNode):
             continue
         nx_graph.add_edge(str(s), str(o), label=str(p))
 
-    net = Network(height="600px", width="100%", directed=True, notebook=False)
-    net.barnes_hut(gravity=-8000, central_gravity=0.2, spring_length=250, spring_strength=0.03, damping=0.09)
+    if nx_graph.number_of_nodes() == 0:
+        return "<p style='color:#aaa;text-align:center;padding:40px'>No graph data to display.</p>"
+
+    def _short(uri: str) -> str:
+        lbl = uri.split("#")[-1] if "#" in uri else uri.split("/")[-1]
+        return (lbl[:38] + "…") if len(lbl) > 38 else lbl
+
+    # Namespace prefix → (background colour, vis.js shape)
+    _NS_STYLES: list[tuple[str, str, str]] = [
+        ("http://example.org/ns#",                       "#4A9EFF", "dot"),
+        ("http://matwerk.org/ontology#",                 "#FF8C42", "box"),
+        ("http://pmd.org/ontology/core#",                "#FF8C42", "box"),
+        ("http://nfdi.org/ontology/core#",               "#F59E0B", "box"),
+        ("http://purl.obolibrary.org/obo/OBI_",          "#A855F7", "box"),
+        ("http://purl.obolibrary.org/obo/IAO_",          "#22D3EE", "box"),
+        ("http://purl.obolibrary.org/obo/",              "#60A5FA", "box"),
+        ("http://qudt.org/schema/qudt/",                 "#34D399", "ellipse"),
+        ("http://qudt.org/vocab/unit/",                  "#6EE7B7", "ellipse"),
+        ("http://www.w3.org/2006/time#",                 "#F472B6", "ellipse"),
+        ("http://www.w3.org/ns/prov#",                   "#FB923C", "ellipse"),
+        ("http://www.w3.org/2002/07/owl#",               "#94A3B8", "triangle"),
+        ("http://www.w3.org/2000/01/rdf-schema#",        "#64748B", "triangleDown"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#",  "#64748B", "triangleDown"),
+    ]
+
+    def _node_style(uri: str) -> tuple[str, str]:
+        for ns, color, shape in _NS_STYLES:
+            if uri.startswith(ns):
+                return color, shape
+        return "#6C8EBF", "dot"
+
+    def _edge_color(pred: str) -> str:
+        if "rdf-syntax-ns#type" in pred:              return "#F59E0B"
+        if "2000/01/rdf-schema#" in pred:             return "#94A3B8"
+        if "qudt.org" in pred:                        return "#34D399"
+        if "ns/prov#" in pred:                        return "#FB923C"
+        if "2006/time#" in pred:                      return "#F472B6"
+        if "matwerk.org" in pred or "pmd.org" in pred:return "#FF8C42"
+        if "obolibrary.org" in pred:                  return "#A855F7"
+        return "#64748B"
+
+    degrees = dict(nx_graph.degree())
+    max_deg = max(degrees.values()) if degrees else 1
+
+    net = Network(height="660px", width="100%", directed=True, notebook=False,
+                  bgcolor="#0f172a", font_color="#e2e8f0")
 
     for node in nx_graph.nodes:
-        short_label = node.split("/")[-1] if "/" in node else node
-        short_label = short_label.split("#")[-1] if "#" in short_label else short_label
-
-        if "Class" in node:
-            node_color = "#FFD700"
-            shape = "box"
-            icon = "📦"
-        elif "Property" in node or "predicate" in node:
-            node_color = "#8FBC8F"
-            shape = "ellipse"
-            icon = "🔗"
-        else:
-            node_color = "#87CEEB"
-            shape = "ellipse"
-            icon = ""
-
-        label = f"{icon} {short_label}".strip() if short_label else ""
+        color, shape = _node_style(node)
+        label = _short(node)
+        deg = degrees.get(node, 1)
+        size = 18 + int(27 * (deg / max_deg))   # 18–45 px, scaled by degree
         net.add_node(
             node,
             label=label,
-            title=node,
+            title=f"{label}<br/><small>{node}</small>",
             shape=shape,
-            color=node_color,
-            size=25,
-            font={"size": 18},
+            color={
+                "background": color,
+                "border": "#ffffff22",
+                "highlight": {"background": "#ffffff", "border": "#ffffff"},
+                "hover":     {"background": "#ffffffdd", "border": "#ffffff"},
+            },
+            size=size,
+            font={"size": 13, "color": "#e2e8f0", "face": "Inter, Arial, sans-serif"},
             shadow=True,
+            borderWidth=1.5,
+            borderWidthSelected=3,
         )
 
     for u, v, d in nx_graph.edges(data=True):
-        edge_label = d["label"].split("/")[-1] if "/" in d["label"] else d["label"]
-        edge_label = edge_label.split("#")[-1] if "#" in edge_label else edge_label
+        pred = d["label"]
         net.add_edge(
             u, v,
-            label=edge_label,
-            font={"size": 14, "align": "middle"},
-            width=2,
-            arrows="to",
-            title=d["label"],
-            color="#999",
+            label=_short(pred),
+            title=pred,
+            width=1.5,
+            color={"color": _edge_color(pred), "highlight": "#ffffff",
+                   "hover": "#ffffff", "opacity": 0.85},
+            arrows={"to": {"enabled": True, "scaleFactor": 0.5}},
         )
 
     net.set_options("""
     const options = {
         "nodes": {
-            "borderWidth": 2,
+            "borderWidth": 1.5,
             "shadow": true,
-            "scaling": {"min": 10, "max": 30},
-            "font": {"size": 16, "face": "arial"}
+            "scaling": {"min": 15, "max": 45},
+            "font": {"size": 13, "face": "Inter, Arial, sans-serif", "color": "#e2e8f0"}
         },
         "edges": {
             "color": {"inherit": false},
-            "smooth": true,
-            "arrows": {"to": {"enabled": true, "scaleFactor": 0.6}}
+            "smooth": {"enabled": true, "type": "curvedCW", "roundness": 0.2},
+            "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}},
+            "font": {
+                "size": 11,
+                "color": "#cbd5e1",
+                "align": "middle",
+                "background": "#1e293b",
+                "strokeWidth": 2,
+                "strokeColor": "#0f172a"
+            },
+            "width": 1.5
         },
         "physics": {
             "enabled": true,
-            "barnesHut": {
-                "gravitationalConstant": -8000,
-                "centralGravity": 0.2,
-                "springLength": 200,
+            "forceAtlas2Based": {
+                "gravitationalConstant": -120,
+                "centralGravity": 0.005,
                 "springConstant": 0.04,
-                "damping": 0.09
+                "springLength": 220,
+                "damping": 0.5,
+                "avoidOverlap": 1
             },
-            "stabilization": {"enabled": true, "iterations": 150}
+            "solver": "forceAtlas2Based",
+            "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}
         },
         "interaction": {
             "hover": true,
-            "tooltipDelay": 100,
+            "tooltipDelay": 50,
             "navigationButtons": true,
             "keyboard": true,
             "multiselect": true,
@@ -225,7 +273,44 @@ def generate_graph_html(rdf_code: str) -> str:
     }
     """)
 
-    return net.generate_html()
+    html = net.generate_html()
+
+    # Inject dark-theme override + colour legend into the generated HTML
+    legend = """
+<style>
+  body, html { background: #0f172a !important; margin: 0; }
+  #mynetwork { background: #0f172a !important; }
+  div.vis-tooltip { background: #1e293b !important; color: #e2e8f0 !important;
+    border: 1px solid #334155 !important; border-radius: 6px !important;
+    font-family: Inter, Arial, sans-serif !important; font-size: 12px !important; }
+  #rdf-legend {
+    position: absolute; top: 12px; right: 12px; z-index: 9999;
+    background: rgba(15,23,42,0.93); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 10px 14px;
+    font-family: Inter, Arial, sans-serif; font-size: 12px; color: #e2e8f0;
+    min-width: 155px; pointer-events: none;
+  }
+  #rdf-legend h4 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #94a3b8; }
+  .rl { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+  .rd { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+  .rd.r { border-radius: 50%; }
+</style>
+<div id="rdf-legend">
+  <h4>Node types</h4>
+  <div class="rl"><div class="rd r" style="background:#4A9EFF"></div>Local instances</div>
+  <div class="rl"><div class="rd"   style="background:#FF8C42"></div>MatWerk / PMD</div>
+  <div class="rl"><div class="rd"   style="background:#F59E0B"></div>NFDI</div>
+  <div class="rl"><div class="rd"   style="background:#A855F7"></div>OBI</div>
+  <div class="rl"><div class="rd"   style="background:#22D3EE"></div>IAO</div>
+  <div class="rl"><div class="rd r" style="background:#34D399"></div>QUDT</div>
+  <div class="rl"><div class="rd r" style="background:#F472B6"></div>Time</div>
+  <div class="rl"><div class="rd r" style="background:#FB923C"></div>PROV</div>
+  <div class="rl"><div class="rd"   style="background:#94A3B8"></div>OWL / RDFS</div>
+  <div class="rl"><div class="rd r" style="background:#6C8EBF"></div>Other</div>
+</div>
+"""
+    return html.replace("</body>", legend + "</body>")
 
 
 # ---------------------------------------------------------------------------
