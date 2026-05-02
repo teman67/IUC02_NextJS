@@ -55,7 +55,7 @@ export default function AboutPage() {
       name: "Amirhossein Bayani (Developer of the Application)",
       affiliation:
         "Albert-Ludwigs-Universität Freiburg, Freiburg im Breisgau, Baden-Württemberg, Germany",
-      link: "https://cv-online-one-gray.vercel.app/",
+      link: "https://cv-online-indol.vercel.app/",
     },
   ];
 
