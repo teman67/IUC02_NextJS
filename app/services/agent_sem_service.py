@@ -259,7 +259,7 @@ def generate_graph_html(rdf_code: str) -> str:
                 "avoidOverlap": 1
             },
             "solver": "forceAtlas2Based",
-            "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}
+            "stabilization": {"enabled": true, "iterations": 150, "updateInterval": 25}
         },
         "interaction": {
             "hover": true,
@@ -310,7 +310,22 @@ def generate_graph_html(rdf_code: str) -> str:
   <div class="rl"><div class="rd r" style="background:#6C8EBF"></div>Other</div>
 </div>
 """
-    return html.replace("</body>", legend + "</body>")
+    # Inject script that turns off physics once the initial layout is done.
+    # Without this, vis.js keeps running the force simulation every frame → high CPU.
+    stop_physics_script = """
+<script type="text/javascript">
+  (function waitForNetwork() {
+    if (typeof network !== 'undefined') {
+      network.on("stabilizationIterationsDone", function () {
+        network.setOptions({ physics: { enabled: false } });
+      });
+    } else {
+      setTimeout(waitForNetwork, 50);
+    }
+  })();
+</script>
+"""
+    return html.replace("</body>", stop_physics_script + legend + "</body>")
 
 
 # ---------------------------------------------------------------------------
