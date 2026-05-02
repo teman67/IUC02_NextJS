@@ -287,7 +287,7 @@ function RDFGraphView({ graph }: { graph: { nodes: GraphNode[]; links: GraphLink
             const n = node as GraphNode & { x: number; y: number };
             const r = Math.max(3, 5 - (globalScale > 4 ? 1 : 0));
             // glow
-            ctx.shadowBlur = 8;
+            ctx.shadowBlur = 4;
             ctx.shadowColor = n.color;
             ctx.beginPath();
             ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
@@ -299,7 +299,7 @@ function RDFGraphView({ graph }: { graph: { nodes: GraphNode[]; links: GraphLink
             ctx.lineWidth = 0.5;
             ctx.stroke();
             // label (only when zoomed enough)
-            if (globalScale > 1.5) {
+            if (globalScale > 2) {
               const fontSize = Math.min(5, 11 / globalScale);
               ctx.font = `${fontSize}px Inter, sans-serif`;
               ctx.fillStyle = "rgba(255,255,255,0.9)";
@@ -313,13 +313,13 @@ function RDFGraphView({ graph }: { graph: { nodes: GraphNode[]; links: GraphLink
           linkWidth={1}
           linkDirectionalArrowLength={4}
           linkDirectionalArrowRelPos={1}
-          linkDirectionalParticles={1}
+          linkDirectionalParticles={0}
           linkDirectionalParticleSpeed={0.004}
           linkDirectionalParticleWidth={1.5}
           linkLabel={(l) => (l as GraphLink).label}
           onLinkHover={(l) => setHoveredLink(l ? (l as GraphLink).label : null)}
-          cooldownTicks={120}
-          d3AlphaDecay={0.02}
+          cooldownTicks={80}
+          d3AlphaDecay={0.03}
           d3VelocityDecay={0.3}
         />
       </div>

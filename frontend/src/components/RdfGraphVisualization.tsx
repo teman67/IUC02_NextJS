@@ -1,6 +1,6 @@
  "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 
 export interface GraphNode {
   id: string;
@@ -56,13 +56,8 @@ export default function RdfGraphVisualization({ graphData }: Props) {
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const mousePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Track real mouse position for tooltip placement
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      mousePos.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener("mousemove", handler);
-    return () => window.removeEventListener("mousemove", handler);
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    mousePos.current = { x: e.clientX, y: e.clientY };
   }, []);
 
   // Dynamic import (browser only)
@@ -93,20 +88,18 @@ export default function RdfGraphVisualization({ graphData }: Props) {
   }, []);
 
   // Filter graph by visible node types
-  const filteredData = {
-    nodes: graphData.nodes.filter((n) => visibleTypes.has(n.node_type)),
-    links: graphData.edges.filter((e) => {
+  const filteredData = useMemo(() => {
+    const nodeTypeById = new Map(graphData.nodes.map((n) => [n.id, n.node_type] as const));
+    const nodes = graphData.nodes.filter((n) => visibleTypes.has(n.node_type));
+    const links = graphData.edges.filter((e) => {
       const srcId = typeof e.source === "object" ? e.source.id : e.source;
       const tgtId = typeof e.target === "object" ? e.target.id : e.target;
-      const srcNode = graphData.nodes.find((n) => n.id === srcId);
-      const tgtNode = graphData.nodes.find((n) => n.id === tgtId);
-      return (
-        srcNode && tgtNode &&
-        visibleTypes.has(srcNode.node_type) &&
-        visibleTypes.has(tgtNode.node_type)
-      );
-    }),
-  };
+      const srcType = nodeTypeById.get(srcId);
+      const tgtType = nodeTypeById.get(tgtId);
+      return !!srcType && !!tgtType && visibleTypes.has(srcType) && visibleTypes.has(tgtType);
+    });
+    return { nodes, links };
+  }, [graphData, visibleTypes]);
 
   const handleNodeHover = useCallback((node: GraphNode | null) => {
     if (node) {
@@ -139,7 +132,7 @@ export default function RdfGraphVisualization({ graphData }: Props) {
   };
 
   return (
-    <div className="relative" ref={containerRef}>
+    <div className="relative" ref={containerRef} onMouseMove={handleMouseMove}>
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <span className="text-sm font-semibold text-gray-700">Filter nodes:</span>
@@ -231,7 +224,9 @@ export default function RdfGraphVisualization({ graphData }: Props) {
               ctx.fillStyle = "#94a3b8";
               ctx.fillText(truncate(link.label, 22), mx, my);
             }}
-            cooldownTicks={120}
+            cooldownTicks={80}
+            d3AlphaDecay={0.04}
+            d3VelocityDecay={0.5}
             onEngineStop={() => fgRef.current?.zoomToFit(300, 40)}
           />
         ) : (

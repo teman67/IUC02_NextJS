@@ -1,11 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface Message {
   role: "user" | "assistant";
@@ -19,6 +16,16 @@ const SUGGESTED_QUESTIONS = [
   "What is the IUC02 workflow?",
   "How do I validate my data?",
 ];
+
+const MAX_STORED_MESSAGES = 40;
+const MAX_REQUEST_MESSAGES = 12;
+
+function trimMessages(messages: Message[]): Message[] {
+  if (messages.length <= MAX_STORED_MESSAGES) return messages;
+  const head = messages[0];
+  const tail = messages.slice(-(MAX_STORED_MESSAGES - 1));
+  return [head, ...tail];
+}
 
 export default function ChatBox() {
   const [isOpen, setIsOpen] = useState(false);
@@ -35,9 +42,33 @@ export default function ChatBox() {
   const [chatSize, setChatSize] = useState({ width: 600, height: 650 });
   const [isResizing, setIsResizing] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [SyntaxHighlighterComp, setSyntaxHighlighterComp] = useState<any>(null);
+  const [syntaxTheme, setSyntaxTheme] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || SyntaxHighlighterComp || syntaxTheme) return;
+
+    let isMounted = true;
+    Promise.all([
+      import("react-syntax-highlighter"),
+      import("react-syntax-highlighter/dist/esm/styles/prism"),
+    ])
+      .then(([highlighterMod, styleMod]) => {
+        if (!isMounted) return;
+        setSyntaxHighlighterComp(() => highlighterMod.Prism);
+        setSyntaxTheme(styleMod.vscDarkPlus);
+      })
+      .catch((err) => {
+        console.error("Failed to load syntax highlighter:", err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, SyntaxHighlighterComp, syntaxTheme]);
 
   // Check for mobile on mount and resize
   useEffect(() => {
@@ -49,13 +80,14 @@ export default function ChatBox() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    // During streaming, avoid repeated smooth animations that trigger extra layout work.
+    scrollToBottom(isLoading ? "auto" : "smooth");
+  }, [messages, isLoading]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -95,7 +127,7 @@ export default function ChatBox() {
     if (!textToSend.trim() || isLoading) return;
 
     const userMessage: Message = { role: "user", content: textToSend };
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => trimMessages([...prev, userMessage, { role: "assistant", content: "" }]));
     setInput("");
     setIsLoading(true);
 
@@ -103,9 +135,7 @@ export default function ChatBox() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // Add a placeholder for the streaming response
-    const streamingMessageIndex = messages.length + 1;
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    const outboundMessages = [...messages, userMessage].slice(-MAX_REQUEST_MESSAGES);
 
     try {
       const response = await fetch("/api/chat", {
@@ -115,7 +145,7 @@ export default function ChatBox() {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          messages: [...messages, userMessage],
+          messages: outboundMessages,
         }),
       });
 
@@ -130,6 +160,22 @@ export default function ChatBox() {
 
       const decoder = new TextDecoder();
       let streamedContent = "";
+      let lastRenderAt = 0;
+      const STREAM_RENDER_THROTTLE_MS = 80;
+
+      const flushStreamToUI = (content: string) => {
+        setMessages((prev) => {
+          if (!prev.length) return prev;
+          const newMessages = [...prev];
+          const lastIdx = newMessages.length - 1;
+          if (newMessages[lastIdx].role !== "assistant") return prev;
+          newMessages[lastIdx] = {
+            role: "assistant",
+            content,
+          };
+          return newMessages;
+        });
+      };
 
       while (true) {
         if (controller.signal.aborted) break;
@@ -146,27 +192,16 @@ export default function ChatBox() {
               
               if (data.content) {
                 streamedContent += data.content;
-                // Update the message in real-time
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[streamingMessageIndex] = {
-                    role: "assistant",
-                    content: streamedContent,
-                  };
-                  return newMessages;
-                });
+                const now = Date.now();
+                if (now - lastRenderAt >= STREAM_RENDER_THROTTLE_MS) {
+                  lastRenderAt = now;
+                  flushStreamToUI(streamedContent);
+                }
               }
 
               if (data.done) {
                 // Final message update
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[streamingMessageIndex] = {
-                    role: "assistant",
-                    content: data.fullMessage,
-                  };
-                  return newMessages;
-                });
+                flushStreamToUI(data.fullMessage ?? streamedContent);
 
                 // Handle warnings for off-topic
                 if (data.warning) {
@@ -175,7 +210,7 @@ export default function ChatBox() {
                     role: "assistant",
                     content: `⚠️ WARNING: ${data.warning}`,
                   };
-                  setMessages((prev) => [...prev, warningMessage]);
+                  setMessages((prev) => trimMessages([...prev, warningMessage]));
                 }
               }
             } catch (e) {
@@ -189,7 +224,7 @@ export default function ChatBox() {
       if (error?.name === "AbortError") {
         setMessages((prev) => {
           const newMessages = prev.slice(0, -1);
-          return [...newMessages, { role: "assistant", content: "_(Request cancelled)_" }];
+          return trimMessages([...newMessages, { role: "assistant", content: "_(Request cancelled)_" }]);
         });
         return;
       }
@@ -214,7 +249,7 @@ export default function ChatBox() {
       // Remove the empty placeholder and add error message
       setMessages((prev) => {
         const newMessages = prev.slice(0, -1); // Remove placeholder
-        return [...newMessages, { role: "assistant", content: errorContent }];
+        return trimMessages([...newMessages, { role: "assistant", content: errorContent }]);
       });
     } finally {
       setIsLoading(false);
@@ -359,16 +394,22 @@ export default function ChatBox() {
                           code({ node, inline, className, children, ...props }: any) {
                             const match = /language-(\w+)/.exec(className || "");
                             return !inline && match ? (
-                              <SyntaxHighlighter
-                                style={vscDarkPlus}
-                                language={match[1]}
-                                PreTag="div"
-                                className="rounded-md text-xs overflow-x-auto"
-                                wrapLongLines={false}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, "")}
-                              </SyntaxHighlighter>
+                              SyntaxHighlighterComp && syntaxTheme ? (
+                                <SyntaxHighlighterComp
+                                  style={syntaxTheme}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  className="rounded-md text-xs overflow-x-auto"
+                                  wrapLongLines={false}
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, "")}
+                                </SyntaxHighlighterComp>
+                              ) : (
+                                <pre className="bg-gray-900 text-gray-100 rounded-md text-xs overflow-x-auto p-3">
+                                  <code>{String(children).replace(/\n$/, "")}</code>
+                                </pre>
+                              )
                             ) : (
                               <code className="bg-gray-200 text-gray-800 px-1 py-0.5 rounded text-xs break-all" {...props}>
                                 {children}

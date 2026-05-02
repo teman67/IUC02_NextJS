@@ -21,9 +21,8 @@
       #cffafe,
       #f0f9ff
     );
-    background-size: 400% 400%;
-    background-attachment: fixed;
-    animation: auroraShift 16s ease-in-out infinite;
+    background-size: 300% 300%;
+    background-attachment: scroll;
   }
   
   body::before {
@@ -221,7 +220,7 @@
   .animate-gradient-text {
     background-size: 200% 200%;
     @apply bg-gradient-to-r from-primary-500 via-accent-purple to-accent-pink bg-clip-text text-transparent;
-    animation: gradientX 4s ease infinite;
+    animation: gradientX 7s ease infinite;
   }
 
   /* Reveal on scroll utility */
@@ -296,4 +295,21 @@
   50%  { background-position: 100% 100%; }
   75%  { background-position: 0% 100%; }
   100% { background-position: 0% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  body {
+    animation: none !important;
+    background-size: auto;
+  }
+
+  .animate-gradient-text,
+  .warning-banner::before,
+  .card-glow::before {
+    animation: none !important;
+  }
 }
