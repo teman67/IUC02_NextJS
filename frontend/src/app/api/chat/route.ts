@@ -66,6 +66,8 @@ export async function POST(request: NextRequest) {
 
     // Get the last user message for caching (ignore conversation history)
     const lastUserMessage = limitedMessages[limitedMessages.length - 1];
+    const lastUserText = String(lastUserMessage?.content || "");
+    const isAgentSemQuestion = /agent\s*-?\s*sem|agentsem|agent semantic|semantic agent|\/agent-sem|agent-sem/i.test(lastUserText);
 
     // Check cache - cache based on user's question only
     const cacheKey = chatCache.getCacheKey([lastUserMessage]);
@@ -117,6 +119,7 @@ The application has the following main features:
 1. Data Generation: Converting and generating RDF (Resource Description Framework) graphs from various data sources
 2. Data Validation: Validating RDF data using SHACL (Shapes Constraint Language) shapes
 3. Workflow Management: Managing the complete data pipeline from generation to validation
+4. AgentSem: AI-assisted semantic workflow page for RDF/SHACL generation, validation, correction, ontology mapping and graph visualization
 
 The application works with:
 - RDF graphs (Turtle format .ttl files)
@@ -131,6 +134,7 @@ Questions about ANY of these topics are ON-TOPIC and should be answered helpfull
 ✓ Turtle (.ttl), JSON-LD, N-Triples, RDF/XML serialization formats
 ✓ OWL, ontologies, semantic web, knowledge graphs, linked data
 ✓ Data validation, data generation, workflows, pipelines
+✓ AgentSem / Agent Sem / /agent-sem page (all capitalization variants)
 ✓ Schemas, metadata, namespaces, IRIs, URIs
 ✓ Materials science data (in context of RDF/SHACL)
 ✓ This IUC02 application and its features
@@ -143,6 +147,8 @@ Examples of ON-TOPIC questions:
 - "What's a triple?"
 - "How do I validate data?"
 - "What is Turtle format?"
+- "What is AgentSem?"
+- "How does AgentSem work in this app?"
 
 === OFF-TOPIC QUESTIONS (Use [OFF_TOPIC] marker) ===
 ONLY mark as off-topic if the question is completely unrelated to the above topics.
@@ -150,7 +156,7 @@ Examples: weather, sports, cooking, general programming (not related to RDF/SHAC
 
 If a question is OFF-TOPIC:
 1. Start your response with: [OFF_TOPIC]
-2. Then politely redirect: "That's not related to the IUC02 framework. I can help with RDF, SHACL, data validation, and semantic web topics. What would you like to know?"
+2. Then politely redirect: "That's not related to the IUC02 framework. I can help with RDF, SHACL, AgentSem, data validation, and semantic web topics. What would you like to know?"
 
 Be helpful, clear, and concise. Explain technical concepts in simple terms when needed.`,
     };
@@ -250,6 +256,19 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
 
           // Check if off-topic after streaming completes
           if (fullMessage.startsWith("[OFF_TOPIC]")) {
+            if (isAgentSemQuestion) {
+              // Safety net: if the model misclassifies AgentSem, treat it as on-topic.
+              const cleanedMessage = fullMessage.replace("[OFF_TOPIC]", "").trim();
+              console.log("✅ AgentSem question was misclassified as off-topic; overriding to on-topic");
+              chatCache.set(cacheKey, cleanedMessage);
+              safeEnqueue(
+                controller,
+                `data: ${JSON.stringify({ content: "", fullMessage: cleanedMessage, done: true })}\n\n`
+              );
+              safeClose(controller);
+              return;
+            }
+
             console.log("⚠️ Off-topic question detected - tracking strike");
             const result = chatCache.trackOffTopic(ip);
             const cleanedMessage = fullMessage.replace("[OFF_TOPIC]", "").trim();
