@@ -158,7 +158,13 @@ If a question is OFF-TOPIC:
 1. Start your response with: [OFF_TOPIC]
 2. Then politely redirect: "That's not related to the IUC02 framework. I can help with RDF, SHACL, AgentSem, data validation, and semantic web topics. What would you like to know?"
 
-Be helpful, clear, and concise. Explain technical concepts in simple terms when needed.`,
+Be helpful, clear, and concise. Explain technical concepts in simple terms when needed.
+
+When the user asks a "how to" question, respond with this structure:
+1) A one-sentence overview
+2) Numbered steps
+3) A valid fenced code block when code/config is needed
+4) A short closing tip`,
     };
 
     // Set a 30-second timeout for the OpenAI call to avoid hanging serverless functions
@@ -221,32 +227,40 @@ Be helpful, clear, and concise. Explain technical concepts in simple terms when 
 
         const decoder = new TextDecoder();
         let fullMessage = "";
+        let sseBuffer = "";
 
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done || cancelled) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split("\n");
+            sseBuffer += decoder.decode(value, { stream: true });
+            const eventBlocks = sseBuffer.split("\n\n");
+            sseBuffer = eventBlocks.pop() ?? "";
 
-            for (const line of lines) {
+            for (const eventBlock of eventBlocks) {
               if (cancelled) break;
-              const trimmedLine = line.trim();
-              if (!trimmedLine || trimmedLine === "data: [DONE]") continue;
-              if (trimmedLine.startsWith("data: ")) {
+              const lines = eventBlock.split("\n");
+
+              for (const line of lines) {
+                const trimmedLine = line.trim();
+                if (!trimmedLine.startsWith("data: ")) continue;
+
+                const payload = trimmedLine.substring(6).trim();
+                if (!payload || payload === "[DONE]") continue;
+
                 try {
-                  const jsonData = JSON.parse(trimmedLine.substring(6));
+                  const jsonData = JSON.parse(payload);
                   const content = jsonData.choices[0]?.delta?.content;
-                  if (content) {
-                    fullMessage += content;
-                    safeEnqueue(
-                      controller,
-                      `data: ${JSON.stringify({ content, fullMessage })}\n\n`
-                    );
-                  }
-                } catch (e) {
-                  // Skip parse errors
+                  if (!content) continue;
+
+                  fullMessage += content;
+                  safeEnqueue(
+                    controller,
+                    `data: ${JSON.stringify({ content, fullMessage })}\n\n`
+                  );
+                } catch {
+                  // Skip malformed frames safely.
                 }
               }
             }

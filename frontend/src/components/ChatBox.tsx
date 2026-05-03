@@ -160,6 +160,7 @@ export default function ChatBox() {
 
       const decoder = new TextDecoder();
       let streamedContent = "";
+      let sseBuffer = "";
       let lastRenderAt = 0;
       const STREAM_RENDER_THROTTLE_MS = 80;
 
@@ -182,14 +183,23 @@ export default function ChatBox() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
+        sseBuffer += decoder.decode(value, { stream: true });
+        const eventBlocks = sseBuffer.split("\n\n");
+        sseBuffer = eventBlocks.pop() ?? "";
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
+        for (const eventBlock of eventBlocks) {
+          const lines = eventBlock.split("\n");
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine.startsWith("data: ")) continue;
+
+            const payload = trimmedLine.substring(6).trim();
+            if (!payload) continue;
+
             try {
-              const data = JSON.parse(line.substring(6));
-              
+              const data = JSON.parse(payload);
+
               if (data.content) {
                 streamedContent += data.content;
                 const now = Date.now();
@@ -213,8 +223,8 @@ export default function ChatBox() {
                   setMessages((prev) => trimMessages([...prev, warningMessage]));
                 }
               }
-            } catch (e) {
-              console.error("Error parsing stream data:", e);
+            } catch {
+              // Skip malformed frames safely.
             }
           }
         }
