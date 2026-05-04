@@ -22,11 +22,11 @@ const MODEL_OPTIONS: Record<string, string[]> = {
     "claude-opus-4-20250514",
   ],
   Ollama: [
-    "tinyllama:latest",
-    "llama3.3:70b-instruct-q8_0",
-    "qwen3:32b-q8_0",
-    "phi4-reasoning:14b-plus-fp16",
-    "mistral-small3.1:24b-instruct-2503-q8_0",
+    "phi3",
+    "gemma2:2b",
+    "llama3.2:3b",
+    "mistral:7b",
+    "llama3:8b",
   ],
 };
 
