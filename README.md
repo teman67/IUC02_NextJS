@@ -372,6 +372,43 @@ OPENAI_API_KEY=your_openai_api_key_here
 - Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
 - Keep this file private and never commit it to version control
 
+## ☁️ Ollama On Cloud Deployments (AgentSem)
+
+When the app backend runs in the cloud (for example on Vercel), `http://localhost:11434` does **not** refer to your laptop.
+It refers to the cloud runtime itself, so local Ollama is unreachable unless you expose it.
+
+### Option A: Publicly Reachable Ollama Server (recommended for stability)
+
+1. Run Ollama on a host your backend can reach (VPS, VM, or dedicated server).
+2. Expose it safely over HTTPS (reverse proxy and TLS).
+3. Use that public URL in the AgentSem **Ollama Endpoint** field.
+4. Verify reachability from the backend side using:
+   - `GET <endpoint>/api/tags` (native Ollama)
+   - or `GET <endpoint>/v1/models` (OpenAI-compatible proxy)
+5. Restrict access with firewall rules, auth, and IP allowlists where possible.
+
+Example endpoint value:
+
+`https://ollama.your-domain.example`
+
+### Option B: Secure Tunnel To Your Local Ollama (good for temporary demos)
+
+1. Keep Ollama running locally on `http://localhost:11434`.
+2. Start a secure tunnel that exposes port 11434 (for example Cloudflare Tunnel, ngrok, or Tailscale Funnel).
+3. Copy the generated public HTTPS URL.
+4. Paste that URL into the AgentSem **Ollama Endpoint** field.
+5. Keep the tunnel process running while using the deployed app.
+
+Example (illustrative):
+
+`https://your-subdomain.trycloudflare.com`
+
+### Practical Notes
+
+- Local development: using `http://localhost:11434` is correct.
+- Cloud deployment: use a publicly reachable Ollama endpoint only.
+- The pipeline workflow code is unchanged; only endpoint reachability differs by runtime location.
+
 ## 🧪 Testing
 
 ### Testing AI Chat Assistant
