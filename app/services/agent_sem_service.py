@@ -380,7 +380,7 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
         return resp.content[0].text
 
     if provider == "Ollama":
-        endpoint = model_info.get("endpoint", "http://localhost:11434")
+        endpoint = str(model_info.get("endpoint") or "http://localhost:11434").rstrip("/")
         data = {
             "model": model,
             "messages": [
@@ -390,12 +390,34 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
             "temperature": temperature,
             "stream": False,
         }
-        resp = requests.post(f"{endpoint}/api/chat", json=data, timeout=120)
-        resp.raise_for_status()
-        json_data = resp.json()
-        if "message" in json_data and "content" in json_data["message"]:
-            return json_data["message"]["content"]
-        raise ValueError(f"Unexpected Ollama response format: {json_data}")
+        try:
+            # Native Ollama chat API
+            resp = requests.post(f"{endpoint}/api/chat", json=data, timeout=120)
+            if resp.status_code == 404:
+                # Some proxies expose only OpenAI-compatible endpoints.
+                oa_payload = {
+                    "model": model,
+                    "messages": data["messages"],
+                    "temperature": temperature,
+                    "stream": False,
+                }
+                resp = requests.post(f"{endpoint}/v1/chat/completions", json=oa_payload, timeout=120)
+                resp.raise_for_status()
+                json_data = resp.json()
+                choices = json_data.get("choices", [])
+                if choices and choices[0].get("message", {}).get("content"):
+                    return choices[0]["message"]["content"]
+                raise ValueError(f"Unexpected OpenAI-compatible Ollama response format: {json_data}")
+
+            resp.raise_for_status()
+            json_data = resp.json()
+            if "message" in json_data and "content" in json_data["message"]:
+                return json_data["message"]["content"]
+            raise ValueError(f"Unexpected Ollama response format: {json_data}")
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(
+                f"Failed to call Ollama at {endpoint}. Ensure Ollama is reachable from the backend runtime. {exc}"
+            ) from exc
 
     raise ValueError(f"Unknown provider: {provider}")
 
@@ -552,11 +574,36 @@ def validate_api_key(provider: str, api_key: str, endpoint: str = "") -> Tuple[b
             from anthropic import Anthropic, AuthenticationError as _AnthErr  # type: ignore
             Anthropic(api_key=api_key).models.list()
         elif provider == "Ollama":
+            endpoint = (endpoint or "http://localhost:11434").rstrip("/")
             if not endpoint:
                 raise ValueError("No endpoint provided for Ollama.")
-            resp = requests.get(f"{endpoint}/v1/models", timeout=5)
-            if resp.status_code != 200:
-                raise Exception(f"Ollama responded with status {resp.status_code}")
+
+            parsed = urllib.parse.urlparse(endpoint)
+            host = (parsed.hostname or "").lower()
+            is_local = host in {"localhost", "127.0.0.1", "::1"}
+            running_in_vercel = bool(os.getenv("VERCEL"))
+
+            # In cloud runtimes, localhost points to the serverless/container host, not the user's machine.
+            if running_in_vercel and is_local:
+                raise ValueError(
+                    "Ollama endpoint points to localhost from a cloud runtime. "
+                    "When deployed (for example on Vercel), localhost refers to the Vercel instance, "
+                    "not your local computer. Use a publicly reachable Ollama endpoint (tunnel, VPS, or hosted service)."
+                )
+
+            # Prefer native Ollama health endpoint, fall back to OpenAI-compatible endpoint.
+            native = requests.get(f"{endpoint}/api/tags", timeout=8)
+            if native.status_code == 200:
+                return True, ""
+
+            compat = requests.get(f"{endpoint}/v1/models", timeout=8)
+            if compat.status_code == 200:
+                return True, ""
+
+            raise Exception(
+                f"Ollama endpoint is reachable but did not return success on /api/tags or /v1/models "
+                f"(statuses: {native.status_code}, {compat.status_code})."
+            )
         return True, ""
     except Exception as exc:
         return False, str(exc)

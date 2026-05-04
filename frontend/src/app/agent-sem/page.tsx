@@ -22,6 +22,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
     "claude-opus-4-20250514",
   ],
   Ollama: [
+    "tinyllama:latest",
     "llama3.3:70b-instruct-q8_0",
     "qwen3:32b-q8_0",
     "phi4-reasoning:14b-plus-fp16",
@@ -345,6 +346,8 @@ function RDFGraphView({ graph }: { graph: { nodes: GraphNode[]; links: GraphLink
 
 // ─── main page ───────────────────────────────────────────────────────────────
 export default function AgentSemPage() {
+  const isLikelyRemoteBackend = /^https?:\/\/(?!localhost|127\.0\.0\.1)/i.test(API_URL);
+
   // config
   const [provider, setProvider] = useState("OpenAI");
   const [model, setModel] = useState("gpt-4.1");
@@ -643,6 +646,12 @@ export default function AgentSemPage() {
                   disabled={isRunning}
                   className="w-full bg-dark-700 border border-white/10 rounded-lg px-3 py-2 text-sm mb-3 text-white"
                 />
+                {isLikelyRemoteBackend && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(endpoint.trim()) && (
+                  <p className="text-[11px] text-amber-300 mb-3 leading-relaxed">
+                    This app is using a remote backend. localhost here points to that server, not your computer.
+                    Use a publicly reachable Ollama endpoint when deployed.
+                  </p>
+                )}
               </>
             )}
 
