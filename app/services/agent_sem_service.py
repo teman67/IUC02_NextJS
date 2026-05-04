@@ -983,7 +983,33 @@ class OntologyMatcherAgent:
         ]:
             for subj in graph.subjects(predicate=RDF_TYPE, object=URIRef(prop_uri)):
                 terms[str(subj)] = self._get_term_info(graph, subj, "Property")
+
+        # Match Streamlit behavior: include typed individuals/instances as ontology terms.
+        for subj in graph.subjects():
+            s = str(subj)
+            if s in terms:
+                continue
+            if self._is_individual(graph, subj):
+                terms[s] = self._get_term_info(graph, subj, "Individual")
         return terms
+
+    @staticmethod
+    def _is_individual(graph: Graph, subj: URIRef) -> bool:
+        """True for typed individuals that are not class/property declarations."""
+        rdf_type = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        skip_types = {
+            URIRef("http://www.w3.org/2002/07/owl#Class"),
+            URIRef("http://www.w3.org/2000/01/rdf-schema#Class"),
+            URIRef("http://www.w3.org/2002/07/owl#ObjectProperty"),
+            URIRef("http://www.w3.org/2002/07/owl#DatatypeProperty"),
+            URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"),
+        }
+        for t in skip_types:
+            if (subj, rdf_type, t) in graph:
+                return False
+        for _ in graph.objects(subj, rdf_type):
+            return True
+        return False
 
     def _get_term_info(self, graph: Graph, term: URIRef, term_type: str) -> Dict:
         info: Dict = {
@@ -1375,44 +1401,90 @@ def run_pipeline(
                   "message": f"Correction attempt {correction_attempt}/{max_corr} ({error_type} error)..."})
 
             if is_syntax_error(report):
-                # Syntax-specific correction prompt (matches Streamlit's 3-branch logic)
-                syntax_report = (
-                    f"The RDF and SHACL code contains Turtle syntax errors.\n\n"
-                    f"Please fix common syntax issues like:\n"
-                    f"- unclosed brackets, missing semicolons\n"
-                    f"- malformed URIs or prefixes\n"
-                    f"- invalid literals or escaped characters\n\n"
-                    f"Do NOT invent data — only fix syntax. Preserve all prefixes and original meaning.\n\n"
-                    f"ERRORS:\n{report}"
-                )
-                rdf_code, shacl_code = agent.corrector.run(rdf_code, shacl_code, syntax_report)
+                correction_prompt = f"""The RDF and SHACL code below contains **Turtle syntax errors**.
+
+Please fix common syntax issues like:
+- unclosed brackets, missing semicolons
+- malformed URIs or prefixes
+- invalid literals or escaped characters
+
+INSTRUCTIONS:
+1. Return corrected RDF in the first ```turtle block
+2. Return corrected SHACL in the second ```turtle block
+3. Do NOT invent data - only fix syntax
+4. Preserve all prefixes and original meaning
+
+RDF:
+```turtle
+{rdf_code}
+
+{shacl_code}
+```"""
+                rdf_code, shacl_code = agent.generator.run(correction_prompt)
             elif not should_retry_correction(report, previous_core_errors):
                 if consecutive_failures < 2:
                     consecutive_failures += 1
-                    enhanced_report = (
-                        f"REPEATED ERROR — previous fixes did not resolve this. Try a different modeling strategy.\n\n"
-                        f"CORE VALIDATION ERROR:\n{core_error}\n\n"
-                        f"FULL REPORT:\n{report}"
-                    )
-                    rdf_code, shacl_code = agent.corrector.run(rdf_code, shacl_code, enhanced_report)
+                    correction_prompt = f"""The RDF and SHACL code below is not passing SHACL validation, and previous fixes have failed.
+
+Please try a **different modeling strategy** and address the **core validation issue**:
+
+CORE VALIDATION ERROR:
+{core_error}
+
+INSTRUCTIONS:
+1. Carefully address the root cause of the SHACL error
+2. Simplify or revise shapes if too strict
+3. Return RDF in first ```turtle block
+4. Return SHACL in second ```turtle block
+5. Do not invent unrelated data. Keep prefixes and intended semantics.
+
+RDF:
+```turtle
+{rdf_code}
+
+{shacl_code}
+```"""
+                    rdf_code, shacl_code = agent.generator.run(correction_prompt)
                 else:
                     push({"type": "step", "step": "correction_aborted",
                           "message": "Max retries for this error pattern reached."})
                     break
             else:
-                rdf_code, shacl_code = agent.corrector.run(rdf_code, shacl_code, report)
+                correction_prompt = f"""Fix the SHACL validation errors in the following RDF and SHACL data.
+
+VALIDATION ERRORS:
+{report}
+
+INSTRUCTIONS:
+1. Fix all SHACL validation issues
+2. Return corrected RDF in first ```turtle block
+3. Return corrected SHACL in second ```turtle block
+4. Preserve all prefixes and structure
+
+RDF:
+```turtle
+{rdf_code}
+
+{shacl_code}
+```"""
+                rdf_code, shacl_code = agent.generator.run(correction_prompt)
 
             previous_core_errors.append(core_error)
             rdf_code, shacl_code = basic_syntax_cleanup(rdf_code, shacl_code)
 
-            rdf_ok2, _ = validate_turtle_syntax(rdf_code)
-            shacl_ok2, _ = validate_turtle_syntax(shacl_code)
+            rdf_ok2, rdf_err2 = validate_turtle_syntax(rdf_code)
+            shacl_ok2, shacl_err2 = validate_turtle_syntax(shacl_code)
             if rdf_ok2 and shacl_ok2:
                 conforms, report = agent.validator.run(rdf_code, shacl_code)
                 if conforms:
                     consecutive_failures = 0
             else:
                 conforms = False
+                report = (
+                    f"Syntax errors prevent SHACL validation.\n"
+                    f"RDF: {rdf_err2 if not rdf_ok2 else 'OK'}\n"
+                    f"SHACL: {shacl_err2 if not shacl_ok2 else 'OK'}"
+                )
 
             push({"type": "step", "step": "correction", "attempt": correction_attempt,
                   "error_type": error_type, "rdf": rdf_code, "shacl": shacl_code,
