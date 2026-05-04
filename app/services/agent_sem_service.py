@@ -892,6 +892,7 @@ class OntologyMapperAgent:
 class CorrectionAgent:
     def __init__(self, model_info: dict) -> None:
         self.model_info = model_info
+        self.system_prompt = "You are an expert at fixing SHACL validation errors in RDF data."
 
     def run(self, rdf_code: str, shacl_code: str, validation_report: str) -> Tuple[str, str]:
         prompt = f"""Fix the SHACL validation errors in the following RDF and SHACL data.
@@ -917,8 +918,7 @@ CURRENT SHACL:
 ```
 
 Return the corrected versions now:"""
-        # Use the full RDFGenerator system prompt (same as Streamlit's correction approach)
-        response = call_llm(prompt, _RDF_GENERATOR_SYSTEM, self.model_info)
+        response = call_llm(prompt, self.system_prompt, self.model_info)
         return extract_rdf_shacl(response)
 
 
@@ -1400,74 +1400,28 @@ def run_pipeline(
             push({"type": "progress", "phase": "correcting",
                   "message": f"Correction attempt {correction_attempt}/{max_corr} ({error_type} error)..."})
 
-            if is_syntax_error(report):
-                correction_prompt = f"""The RDF and SHACL code below contains **Turtle syntax errors**.
-
-Please fix common syntax issues like:
-- unclosed brackets, missing semicolons
-- malformed URIs or prefixes
-- invalid literals or escaped characters
-
-INSTRUCTIONS:
-1. Return corrected RDF in the first ```turtle block
-2. Return corrected SHACL in the second ```turtle block
-3. Do NOT invent data - only fix syntax
-4. Preserve all prefixes and original meaning
-
-RDF:
-```turtle
-{rdf_code}
-
-{shacl_code}
-```"""
-                rdf_code, shacl_code = agent.generator.run(correction_prompt)
-            elif not should_retry_correction(report, previous_core_errors):
+            if not should_retry_correction(report, previous_core_errors):
                 if consecutive_failures < 2:
                     consecutive_failures += 1
-                    correction_prompt = f"""The RDF and SHACL code below is not passing SHACL validation, and previous fixes have failed.
+                    enhanced_report = f"""
+                    REPEATED ERROR PATTERN DETECTED: {core_error}
 
-Please try a **different modeling strategy** and address the **core validation issue**:
+                    Previous attempts have failed to fix this issue. Please:
+                    1. Focus on the ROOT CAUSE of this specific error type
+                    2. Consider completely different approaches to modeling this data
+                    3. Simplify the constraints if they are too restrictive
+                    4. Check for fundamental modeling issues
 
-CORE VALIDATION ERROR:
-{core_error}
-
-INSTRUCTIONS:
-1. Carefully address the root cause of the SHACL error
-2. Simplify or revise shapes if too strict
-3. Return RDF in first ```turtle block
-4. Return SHACL in second ```turtle block
-5. Do not invent unrelated data. Keep prefixes and intended semantics.
-
-RDF:
-```turtle
-{rdf_code}
-
-{shacl_code}
-```"""
-                    rdf_code, shacl_code = agent.generator.run(correction_prompt)
+                    Original error report:
+                    {report}
+                    """
+                    rdf_code, shacl_code = agent.corrector.run(rdf_code, shacl_code, enhanced_report)
                 else:
                     push({"type": "step", "step": "correction_aborted",
                           "message": "Max retries for this error pattern reached."})
                     break
             else:
-                correction_prompt = f"""Fix the SHACL validation errors in the following RDF and SHACL data.
-
-VALIDATION ERRORS:
-{report}
-
-INSTRUCTIONS:
-1. Fix all SHACL validation issues
-2. Return corrected RDF in first ```turtle block
-3. Return corrected SHACL in second ```turtle block
-4. Preserve all prefixes and structure
-
-RDF:
-```turtle
-{rdf_code}
-
-{shacl_code}
-```"""
-                rdf_code, shacl_code = agent.generator.run(correction_prompt)
+                rdf_code, shacl_code = agent.corrector.run(rdf_code, shacl_code, report)
 
             previous_core_errors.append(core_error)
             rdf_code, shacl_code = basic_syntax_cleanup(rdf_code, shacl_code)
@@ -1481,7 +1435,7 @@ RDF:
             else:
                 conforms = False
                 report = (
-                    f"Syntax errors prevent SHACL validation.\n"
+                    f"Syntax errors after correction:\n"
                     f"RDF: {rdf_err2 if not rdf_ok2 else 'OK'}\n"
                     f"SHACL: {shacl_err2 if not shacl_ok2 else 'OK'}"
                 )
