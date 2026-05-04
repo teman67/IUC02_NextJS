@@ -381,6 +381,9 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
 
     if provider == "Ollama":
         endpoint = str(model_info.get("endpoint") or "http://localhost:11434").rstrip("/")
+        connect_timeout = float(os.getenv("OLLAMA_CONNECT_TIMEOUT_SEC", "10"))
+        read_timeout = float(os.getenv("OLLAMA_READ_TIMEOUT_SEC", "600"))
+        req_timeout = (connect_timeout, read_timeout)
         data = {
             "model": model,
             "messages": [
@@ -392,7 +395,7 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
         }
         try:
             # Native Ollama chat API
-            resp = requests.post(f"{endpoint}/api/chat", json=data, timeout=120)
+            resp = requests.post(f"{endpoint}/api/chat", json=data, timeout=req_timeout)
             if resp.status_code == 404:
                 # Some proxies expose only OpenAI-compatible endpoints.
                 oa_payload = {
@@ -401,7 +404,7 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
                     "temperature": temperature,
                     "stream": False,
                 }
-                resp = requests.post(f"{endpoint}/v1/chat/completions", json=oa_payload, timeout=120)
+                resp = requests.post(f"{endpoint}/v1/chat/completions", json=oa_payload, timeout=req_timeout)
                 resp.raise_for_status()
                 json_data = resp.json()
                 choices = json_data.get("choices", [])
@@ -414,6 +417,12 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
             if "message" in json_data and "content" in json_data["message"]:
                 return json_data["message"]["content"]
             raise ValueError(f"Unexpected Ollama response format: {json_data}")
+        except requests.exceptions.ReadTimeout as exc:
+            raise RuntimeError(
+                f"Ollama request timed out after {read_timeout:.0f}s at {endpoint}. "
+                "The model may be still generating. Try a smaller/faster model, "
+                "or increase OLLAMA_READ_TIMEOUT_SEC in backend environment."
+            ) from exc
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(
                 f"Failed to call Ollama at {endpoint}. Ensure Ollama is reachable from the backend runtime. {exc}"

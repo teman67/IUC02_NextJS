@@ -367,10 +367,17 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
+Optional backend environment variables for local Ollama:
+```env
+OLLAMA_CONNECT_TIMEOUT_SEC=10
+OLLAMA_READ_TIMEOUT_SEC=600
+```
+
 **Note:** 
 - The `OPENAI_API_KEY` is required for the AI chat assistant feature
 - Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
 - Keep this file private and never commit it to version control
+- If Ollama times out locally, increase `OLLAMA_READ_TIMEOUT_SEC` in the backend environment.
 
 ## ☁️ Ollama On Cloud Deployments (AgentSem)
 
