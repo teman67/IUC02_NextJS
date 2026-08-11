@@ -5,3 +5,21 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+
+# Committed virtualenvs - the buildpack installs from requirements.txt, so these
+# are pure slug weight (~1,245 files) and can shadow nothing useful.
+Lib/
+Scripts/
+pyvenv.cfg
+.venv/
+venv/
+
+# Not used by the Python web process (the frontend deploys separately).
+# Remove this line if you ever build the frontend on Heroku too.
+frontend/
+
+# Source the AgentSem service was ported from; not imported at runtime.
+Streamlit_app/
+
+# Docs and audit reports
+*.md

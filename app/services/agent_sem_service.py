@@ -623,14 +623,16 @@ def validate_api_key(provider: str, api_key: str, endpoint: str = "") -> Tuple[b
             parsed = urllib.parse.urlparse(endpoint)
             host = (parsed.hostname or "").lower()
             is_local = host in {"localhost", "127.0.0.1", "::1"}
-            running_in_vercel = bool(os.getenv("VERCEL"))
+            # VERCEL on Vercel, DYNO on Heroku - each platform sets its own marker.
+            running_in_cloud = bool(os.getenv("VERCEL") or os.getenv("DYNO"))
 
             # In cloud runtimes, localhost points to the serverless/container host, not the user's machine.
-            if running_in_vercel and is_local:
+            if running_in_cloud and is_local:
                 raise ValueError(
                     "Ollama endpoint points to localhost from a cloud runtime. "
-                    "When deployed (for example on Vercel), localhost refers to the Vercel instance, "
-                    "not your local computer. Use a publicly reachable Ollama endpoint (tunnel, VPS, or hosted service)."
+                    "When deployed (for example on Vercel or Heroku), localhost refers to the server "
+                    "instance, not your local computer. Use a publicly reachable Ollama endpoint "
+                    "(tunnel, VPS, or hosted service)."
                 )
 
             # Prefer native Ollama health endpoint, fall back to OpenAI-compatible endpoint.

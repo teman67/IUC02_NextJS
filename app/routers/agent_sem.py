@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -23,11 +24,18 @@ logger = logging.getLogger("iuc02.agent_sem")
 
 router = APIRouter(prefix="/api/agent-sem", tags=["agent-sem"])
 
-# How long the stream waits for the next event before giving up.  This MUST stay
-# above the longest a single LLM call can take (OLLAMA_READ_TIMEOUT_SEC defaults
-# to 600 s), otherwise a slow model reliably trips the timeout and orphans a
-# pipeline that is still running normally.
+# How long the stream waits for a real pipeline event before giving up.  This MUST
+# stay above the longest a single LLM call can take (OLLAMA_READ_TIMEOUT_SEC
+# defaults to 600 s), otherwise a slow model reliably trips the timeout and
+# orphans a pipeline that is still running normally.
 SSE_IDLE_TIMEOUT: float = float(os.getenv("AGENTSEM_SSE_IDLE_TIMEOUT_SEC", "660"))
+
+# Interval between keepalive comments.  Reverse proxies cut idle streams well
+# before SSE_IDLE_TIMEOUT - Heroku's router terminates a response after a rolling
+# 55 s window with no bytes on the wire, and the pipeline is legitimately silent
+# for longer than that during a single LLM call.  Any byte resets that window, so
+# a periodic SSE comment keeps the connection alive without emitting a real event.
+HEARTBEAT_SEC: float = float(os.getenv("AGENTSEM_SSE_HEARTBEAT_SEC", "15"))
 
 # Bounded so an abandoned stream cannot accumulate events without limit - each
 # `step` event carries the full RDF + SHACL text.
@@ -175,16 +183,24 @@ async def generate_stream(request: Request, body: AgentSemRequest):
     task = asyncio.create_task(_run())
 
     async def event_generator():
+        last_event = time.monotonic()
         try:
             while True:
                 if await request.is_disconnected():
                     logger.info("Client disconnected; cancelling pipeline")
                     break
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=SSE_IDLE_TIMEOUT)
+                    event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SEC)
                 except asyncio.TimeoutError:
-                    yield "data: " + json.dumps({"type": "error", "message": "Pipeline timed out."}) + "\n\n"
-                    break
+                    # A comment line: EventSource clients ignore it, but it is a
+                    # byte on the wire, which is what keeps the proxy from cutting
+                    # the stream during a long LLM call.
+                    yield ": keepalive\n\n"
+                    if time.monotonic() - last_event > SSE_IDLE_TIMEOUT:
+                        yield "data: " + json.dumps({"type": "error", "message": "Pipeline timed out."}) + "\n\n"
+                        break
+                    continue
+                last_event = time.monotonic()
                 yield "data: " + json.dumps(event) + "\n\n"
                 if event.get("type") in ("done", "error"):
                     break

@@ -1,4 +1,9 @@
 venv/
+.venv
+# Virtualenv created in the repo root (Lib/, Scripts/, pyvenv.cfg)
+Lib/
+Scripts/
+pyvenv.cfg
 __pycache__/
 *.pyc
 *.pyo
