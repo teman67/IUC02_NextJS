@@ -39,14 +39,20 @@ async def validate_rdf(request: ValidationRequest):
         len(request.shacl_content),
     )
     try:
-        conforms, results_text, report_details, json_ld = await run_validation(
-            request.rdf_content, request.shacl_content
-        )
+        (
+            conforms,
+            results_text,
+            report_details,
+            json_ld,
+            total_details,
+        ) = await run_validation(request.rdf_content, request.shacl_content)
         elapsed = time.monotonic() - start
         logger.info(
-            "[%s] /api/validate done – conforms=%s latency=%.2fs",
+            "[%s] /api/validate done – conforms=%s details=%d/%d latency=%.2fs",
             req_id,
             conforms,
+            len(report_details),
+            total_details,
             elapsed,
         )
         return {
@@ -54,6 +60,9 @@ async def validate_rdf(request: ValidationRequest):
             "report_text": results_text,
             "report_details": report_details,
             "json_ld": json_ld,
+            # Detail rows are capped; tell the client when some were omitted.
+            "total_detail_triples": total_details,
+            "details_truncated": total_details > len(report_details),
         }
     except Exception:
         logger.exception("[%s] /api/validate error", req_id)

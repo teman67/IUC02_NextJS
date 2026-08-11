@@ -14,10 +14,12 @@ def register_middleware(app: FastAPI) -> None:
     async def log_requests(request: Request, call_next):
         req_id = str(uuid.uuid4())[:8]
         start = time.monotonic()
-        client_ip = request.headers.get(
-            "x-forwarded-for",
-            request.client.host if request.client else "unknown",
-        )
+        # Single source of truth, shared with the rate limiter (slowapi's
+        # get_remote_address also reads request.client.host).  Reading
+        # x-forwarded-for directly was spoofable and disagreed with the limiter;
+        # uvicorn's --proxy-headers resolves the real client into request.client
+        # when running behind a trusted proxy. See the Procfile.
+        client_ip = request.client.host if request.client else "unknown"
         logger.info(
             "[%s] --> %s %s  ip=%s",
             req_id,

@@ -1,14 +1,29 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.9
-pyshacl==0.25.0
+# Pinned to the set the backend was verified against (2026-08-11).
+# Previously these pins did not match any environment actually in use, which made
+# profiling and bug reports impossible to reproduce - rdflib and pyshacl in
+# particular changed parse/validate performance between versions.
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+pydantic==2.9.2
+python-dotenv==1.0.1
+httpx==0.27.2
+
+# RDF / SHACL. Keep these two in lockstep; pyshacl pins a compatible rdflib range
+# and mismatches surface as confusing validation differences.
 rdflib==7.0.0
-pydantic==2.6.0
-python-dotenv==1.0.0
-openai>=1.58.0
-httpx>=0.28.0
+pyshacl==0.25.0
+
+# Graph building and visualisation
 networkx==3.3
-pyvis>=0.3.2
+pyvis==0.3.2
+
+# LLM providers. Upper bounds guard against a breaking major; the code uses only
+# the stable surface (chat.completions, messages.create, models.list).
+openai>=1.58.0,<2
+anthropic>=0.40.0,<1
+
+# Rate limiting and HTTP client for the Ollama provider
 slowapi==0.1.9
-anthropic>=0.40.0
-requests>=2.32.0
+requests==2.32.3

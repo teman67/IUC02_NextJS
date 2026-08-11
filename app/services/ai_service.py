@@ -2,10 +2,17 @@
 
 
 def count_errors(report_text: str) -> int:
-    """Estimate the number of constraint violations in a SHACL report."""
+    """Estimate the number of constraint violations in a SHACL report.
+
+    The fallback counts "Result Path:" rather than the bare word "result": a
+    pyshacl report emits "Result Path:", "Result Severity:" and "Result Message:"
+    per violation, so counting "result" overstated the total by roughly 3-4x. That
+    number is injected into the fix prompt and returned as original_error_count,
+    so overcounting told the model to fix errors that did not exist.
+    """
     count = report_text.lower().count("constraint violation")
     if count == 0:
-        count = report_text.lower().count("result")
+        count = report_text.count("Result Path:")
     return count
 
 

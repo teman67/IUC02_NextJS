@@ -16,6 +16,7 @@ from app.services.agent_sem_service import (
     get_example_content,
     generate_graph_html,
     rdf_to_graph_data,
+    redact,
     run_pipeline,
     validate_api_key,
 )
@@ -175,8 +176,11 @@ async def generate_stream(request: Request, body: AgentSemRequest):
                     cancel,
                 )
         except Exception as exc:
-            logger.exception("Pipeline task failed")
-            push({"type": "error", "message": str(exc)})
+            # May be a provider error echoing the credentials back - redact before
+            # it reaches the logs or the client.
+            safe = redact(exc, body.api_key, body.endpoint)
+            logger.error("Pipeline task failed: %s", safe)
+            push({"type": "error", "message": safe})
         finally:
             push({"type": "done"})
 

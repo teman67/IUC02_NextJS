@@ -11,21 +11,109 @@ import logging
 import os
 import re
 import threading
+import time
+import traceback
 import urllib.parse
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
+import httpx
 import requests
 from rdflib import Graph, Literal, URIRef, BNode
-from pyshacl import validate as _shacl_validate
+
+from app.services.rdf_service import validate_graphs
 
 logger = logging.getLogger("iuc02.agent_sem")
+
+# ---------------------------------------------------------------------------
+# Limits, budgets and shared clients
+# ---------------------------------------------------------------------------
 
 # Cap on match dicts returned by find_matches.  Without this a low similarity
 # threshold retains one 9-key dict per (rdf_term x ontology_term) pair - over a
 # million of them, multiple GB, for an ordinary request.
 MAX_MATCHES: int = int(os.getenv("AGENTSEM_MAX_MATCHES", "500"))
+
+# Longest a single hosted-LLM call may take.  Without this the SDKs apply their
+# own defaults (600 s for OpenAI, plus retries), so one request could hold a
+# pipeline thread for well over an hour.
+LLM_READ_TIMEOUT_SEC: float = float(os.getenv("LLM_READ_TIMEOUT_SEC", "180"))
+LLM_CONNECT_TIMEOUT_SEC: float = float(os.getenv("LLM_CONNECT_TIMEOUT_SEC", "10"))
+LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "1"))
+
+# Wall-clock ceiling for one whole pipeline run, checked at each step boundary.
+# max_corr=8 plus optimization passes is ~20 LLM calls, so the per-call timeout
+# alone does not bound the total.
+PIPELINE_BUDGET_SEC: float = float(os.getenv("AGENTSEM_BUDGET_SEC", "900"))
+
+# Cache validated credentials briefly: the frontend calls /validate-key and then
+# /generate-stream, which used to probe the provider twice for the same key.
+KEY_CACHE_TTL_SEC: float = float(os.getenv("AGENTSEM_KEY_CACHE_TTL_SEC", "300"))
+
+# SHACL inference for the pipeline's validator.  Deliberately "none", which is
+# what pyshacl's defaults gave this call site before the two validation paths were
+# consolidated - see rdf_service.SHACL_INFERENCE for the API endpoints' setting.
+AGENTSEM_SHACL_INFERENCE: str = os.getenv("AGENTSEM_SHACL_INFERENCE", "none")
+
+# Shared HTTP session so the ~20 Ollama calls in a pipeline reuse connections
+# instead of paying a fresh TCP (+TLS) handshake each time.
+_http_session = requests.Session()
+_http_session.mount("http://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
+_http_session.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
+
+
+def redact(message: str, *secrets: str) -> str:
+    """Strip API keys out of text that is about to be logged or sent to a client.
+
+    Provider SDK errors sometimes echo request context, and Ollama error strings
+    interpolate the endpoint URL, which may itself carry credentials.
+    """
+    out = str(message)
+    for secret in secrets:
+        if secret and len(secret) >= 8:
+            out = out.replace(secret, "***redacted***")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Cached LLM clients
+#
+# call_llm previously built a fresh client - and therefore a fresh httpx
+# connection pool - on every one of the ~20 calls in a pipeline run.  Keys are
+# supplied per request, so this cannot be a single global; a small bounded cache
+# keyed by credentials gives connection reuse without unbounded growth.
+# ---------------------------------------------------------------------------
+
+_CLIENT_CACHE_MAX = 32
+_client_cache: "dict[tuple, object]" = {}
+_client_lock = threading.Lock()
+
+
+def _llm_timeout() -> "httpx.Timeout":
+    return httpx.Timeout(LLM_READ_TIMEOUT_SEC, connect=LLM_CONNECT_TIMEOUT_SEC)
+
+
+def _get_cached_client(kind: str, api_key: str):
+    """Return a cached provider client, building it on first use."""
+    key = (kind, api_key)
+    with _client_lock:
+        client = _client_cache.get(key)
+        if client is not None:
+            return client
+        if kind == "openai":
+            from openai import OpenAI  # imported lazily so the module stays importable
+            client = OpenAI(api_key=api_key, timeout=_llm_timeout(), max_retries=LLM_MAX_RETRIES)
+        elif kind == "anthropic":
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key, timeout=_llm_timeout(), max_retries=LLM_MAX_RETRIES)
+        else:
+            raise ValueError(f"Unknown client kind: {kind}")
+        if len(_client_cache) >= _CLIENT_CACHE_MAX:
+            _client_cache.pop(next(iter(_client_cache)))
+        _client_cache[key] = client
+        logger.info("Created %s client (cache size %d)", kind, len(_client_cache))
+        return client
 
 # ---------------------------------------------------------------------------
 # RDF → Graph data for visualisation
@@ -383,8 +471,7 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
     temperature = float(model_info.get("temperature", 0.3))
 
     if provider == "OpenAI":
-        from openai import OpenAI  # type: ignore
-        client = OpenAI(api_key=model_info["api_key"])
+        client = _get_cached_client("openai", model_info["api_key"])
         resp = client.chat.completions.create(
             model=model,
             messages=[
@@ -396,8 +483,7 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
         return resp.choices[0].message.content or ""
 
     if provider == "Anthropic":
-        from anthropic import Anthropic  # type: ignore
-        client = Anthropic(api_key=model_info["api_key"])
+        client = _get_cached_client("anthropic", model_info["api_key"])
         resp = client.messages.create(
             model=model,
             max_tokens=4000,
@@ -422,8 +508,8 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
             "stream": False,
         }
         try:
-            # Native Ollama chat API
-            resp = requests.post(f"{endpoint}/api/chat", json=data, timeout=req_timeout)
+            # Native Ollama chat API (shared session -> pooled connections)
+            resp = _http_session.post(f"{endpoint}/api/chat", json=data, timeout=req_timeout)
             if resp.status_code == 404:
                 # Some proxies expose only OpenAI-compatible endpoints.
                 oa_payload = {
@@ -432,7 +518,9 @@ def call_llm(prompt: str, system_prompt: str, model_info: dict) -> str:
                     "temperature": temperature,
                     "stream": False,
                 }
-                resp = requests.post(f"{endpoint}/v1/chat/completions", json=oa_payload, timeout=req_timeout)
+                resp = _http_session.post(
+                    f"{endpoint}/v1/chat/completions", json=oa_payload, timeout=req_timeout
+                )
                 resp.raise_for_status()
                 json_data = resp.json()
                 choices = json_data.get("choices", [])
@@ -529,10 +617,20 @@ _SYNTAX_FIXES = [
 ]
 
 
+# Compiled once at import.  NOTE: this is tidiness, not a speed-up - measured at
+# 8.8 ms/doc uncompiled vs 8.6 ms precompiled, because Python's re module already
+# caches compiled patterns.  The cost is the 42 full-document scans themselves
+# (~140 ms per request), which is not worth restructuring for.
+_SYNTAX_FIXES_COMPILED: List[Tuple["re.Pattern[str]", str]] = [
+    (re.compile(pattern, re.MULTILINE), replacement)
+    for pattern, replacement in _SYNTAX_FIXES
+]
+
+
 def basic_syntax_cleanup(rdf_text: str, shacl_text: str) -> Tuple[str, str]:
     def clean(text: str) -> str:
-        for pattern, replacement in _SYNTAX_FIXES:
-            text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+        for pattern, replacement in _SYNTAX_FIXES_COMPILED:
+            text = pattern.sub(replacement, text)
         return text.strip()
     return clean(rdf_text), clean(shacl_text)
 
@@ -607,14 +705,42 @@ def should_retry_correction(report: str, previous_core_errors: list[str], max_sa
     return previous_core_errors.count(core_error) < max_same_error
 
 
-def validate_api_key(provider: str, api_key: str, endpoint: str = "") -> Tuple[bool, str]:
+_key_cache: Dict[Tuple[str, str, str], Tuple[float, bool, str]] = {}
+_key_cache_lock = threading.Lock()
+
+
+def validate_api_key(
+    provider: str, api_key: str, endpoint: str = "", *, use_cache: bool = True
+) -> Tuple[bool, str]:
+    """Probe the provider to confirm the credentials work.
+
+    Successful results are cached for KEY_CACHE_TTL_SEC so that the
+    /validate-key call the frontend makes immediately before /generate-stream
+    does not cause the provider to be probed twice.  Failures are not cached, so
+    a corrected key takes effect at once.
+    """
+    cache_key = (provider, api_key, endpoint)
+    if use_cache:
+        with _key_cache_lock:
+            hit = _key_cache.get(cache_key)
+        if hit and time.monotonic() - hit[0] < KEY_CACHE_TTL_SEC:
+            return hit[1], hit[2]
+
+    ok, message = _validate_api_key_uncached(provider, api_key, endpoint)
+    if ok and use_cache:
+        with _key_cache_lock:
+            if len(_key_cache) > 64:
+                _key_cache.clear()
+            _key_cache[cache_key] = (time.monotonic(), ok, message)
+    return ok, message
+
+
+def _validate_api_key_uncached(provider: str, api_key: str, endpoint: str = "") -> Tuple[bool, str]:
     try:
         if provider == "OpenAI":
-            import openai as _openai  # type: ignore
-            _openai.OpenAI(api_key=api_key).models.list()
+            _get_cached_client("openai", api_key).models.list()
         elif provider == "Anthropic":
-            from anthropic import Anthropic, AuthenticationError as _AnthErr  # type: ignore
-            Anthropic(api_key=api_key).models.list()
+            _get_cached_client("anthropic", api_key).models.list()
         elif provider == "Ollama":
             endpoint = (endpoint or "http://localhost:11434").rstrip("/")
             if not endpoint:
@@ -636,11 +762,11 @@ def validate_api_key(provider: str, api_key: str, endpoint: str = "") -> Tuple[b
                 )
 
             # Prefer native Ollama health endpoint, fall back to OpenAI-compatible endpoint.
-            native = requests.get(f"{endpoint}/api/tags", timeout=8)
+            native = _http_session.get(f"{endpoint}/api/tags", timeout=8)
             if native.status_code == 200:
                 return True, ""
 
-            compat = requests.get(f"{endpoint}/v1/models", timeout=8)
+            compat = _http_session.get(f"{endpoint}/v1/models", timeout=8)
             if compat.status_code == 200:
                 return True, ""
 
@@ -650,7 +776,8 @@ def validate_api_key(provider: str, api_key: str, endpoint: str = "") -> Tuple[b
             )
         return True, ""
     except Exception as exc:
-        return False, str(exc)
+        # Provider errors can echo the credentials back; never return them raw.
+        return False, redact(exc, api_key, endpoint)
 
 
 # ---------------------------------------------------------------------------
@@ -842,14 +969,21 @@ class RDFGeneratorAgent:
 
 class ValidatorAgent:
     def run_graphs(self, rdf_graph: Graph, shacl_graph: Graph) -> Tuple[bool, str]:
-        """Validate already-parsed graphs.
+        """Validate already-parsed graphs via the shared pyshacl helper.
+
+        Uses AGENTSEM_SHACL_INFERENCE (default "none"), which preserves the
+        behaviour this call site had when it invoked pyshacl with bare defaults.
+        The API endpoints in rdf_service use "rdfs"; the two differ on purpose and
+        are now explicit rather than accidental.
 
         Note: pyshacl may add triples to *rdf_graph* in place when inference is
         enabled, so do not reuse the graph for anything else afterwards.
         """
         try:
-            conforms, _, report = _shacl_validate(data_graph=rdf_graph, shacl_graph=shacl_graph)
-            return bool(conforms), str(report)
+            conforms, report, _details, _total = validate_graphs(
+                rdf_graph, shacl_graph, inference=AGENTSEM_SHACL_INFERENCE
+            )
+            return conforms, report
         except Exception as exc:
             return False, f"Validation Error: {exc}"
 
@@ -975,6 +1109,16 @@ Return the corrected versions now:"""
 
 _WORD_RE = re.compile(r'[A-Z][a-z]*|[a-z]+')
 
+# Built once at import rather than rebuilt on every _is_individual() call.
+_RDF_TYPE = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+_SKIP_TYPES = frozenset({
+    URIRef("http://www.w3.org/2002/07/owl#Class"),
+    URIRef("http://www.w3.org/2000/01/rdf-schema#Class"),
+    URIRef("http://www.w3.org/2002/07/owl#ObjectProperty"),
+    URIRef("http://www.w3.org/2002/07/owl#DatatypeProperty"),
+    URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"),
+})
+
 
 def _word_set(local_lower: str) -> Set[str]:
     return set(_WORD_RE.findall(local_lower))
@@ -1062,7 +1206,9 @@ class OntologyMatcherAgent:
                 terms[str(subj)] = self._get_term_info(graph, subj, "Property")
 
         # Match Streamlit behavior: include typed individuals/instances as ontology terms.
-        for subj in graph.subjects():
+        # graph.subjects() yields one entry per triple, so dedupe before the
+        # per-subject type probes.
+        for subj in set(graph.subjects()):
             s = str(subj)
             if s in terms:
                 continue
@@ -1073,20 +1219,11 @@ class OntologyMatcherAgent:
     @staticmethod
     def _is_individual(graph: Graph, subj: URIRef) -> bool:
         """True for typed individuals that are not class/property declarations."""
-        rdf_type = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
-        skip_types = {
-            URIRef("http://www.w3.org/2002/07/owl#Class"),
-            URIRef("http://www.w3.org/2000/01/rdf-schema#Class"),
-            URIRef("http://www.w3.org/2002/07/owl#ObjectProperty"),
-            URIRef("http://www.w3.org/2002/07/owl#DatatypeProperty"),
-            URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"),
-        }
-        for t in skip_types:
-            if (subj, rdf_type, t) in graph:
-                return False
-        for _ in graph.objects(subj, rdf_type):
-            return True
-        return False
+        # One pass over the declared types instead of five separate graph probes.
+        types = set(graph.objects(subj, _RDF_TYPE))
+        if not types or (types & _SKIP_TYPES):
+            return False
+        return True
 
     def _get_term_info(self, graph: Graph, term: URIRef, term_type: str) -> Dict:
         info: Dict = {
@@ -1553,20 +1690,36 @@ def run_pipeline(
     away or the stream times out.
     """
 
+    provider = model_info.get("provider", "")
+    api_key = model_info.get("api_key", "")
+    endpoint = model_info.get("endpoint", "")
+    deadline = time.monotonic() + PIPELINE_BUDGET_SEC
+
     def cancelled(where: str) -> bool:
+        """True if the client went away or the run has outlived its budget."""
         if cancel is not None and cancel.is_set():
             logger.info("Pipeline cancelled by client; aborting at %s", where)
+            return True
+        if time.monotonic() > deadline:
+            logger.warning("Pipeline exceeded %.0fs budget; aborting at %s",
+                           PIPELINE_BUDGET_SEC, where)
+            push({
+                "type": "error",
+                "message": f"Pipeline exceeded its {PIPELINE_BUDGET_SEC:.0f}s time budget "
+                           f"at: {where}.",
+            })
             return True
         return False
 
     try:
-        # Validate API key first
-        provider = model_info.get("provider", "")
-        api_key = model_info.get("api_key", "")
-        endpoint = model_info.get("endpoint", "")
+        # Validate API key first (cached briefly, so /validate-key immediately
+        # before this does not cause a second probe).
         valid_key, key_msg = validate_api_key(provider, api_key, endpoint)
         if not valid_key:
-            push({"type": "error", "message": f"API key validation failed: {key_msg}"})
+            push({
+                "type": "error",
+                "message": f"API key validation failed: {redact(key_msg, api_key, endpoint)}",
+            })
             return
 
         if cancelled("start"):
@@ -1733,5 +1886,12 @@ def run_pipeline(
               "replacement_count": replacement_count})
 
     except Exception as exc:
-        logger.exception("Pipeline error")
-        push({"type": "error", "message": str(exc)})
+        # logger.exception would write the raw exception text (and traceback, which
+        # embeds it) to the logs, so redact both before anything is emitted.
+        safe = redact(exc, api_key, endpoint)
+        logger.error(
+            "Pipeline error: %s\n%s",
+            safe,
+            redact(traceback.format_exc(), api_key, endpoint),
+        )
+        push({"type": "error", "message": safe})

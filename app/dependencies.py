@@ -64,6 +64,15 @@ def configure_default_executor(loop: asyncio.AbstractEventLoop) -> None:
 
 _openai_client: AsyncOpenAI | None = None
 
+# Read timeout for the app's own OpenAI key (the AI analyse/fix endpoints).
+# Note: behind a proxy with a shorter request timeout than this - Heroku's router
+# cuts non-streaming responses at 30 s - the streaming endpoints are unaffected
+# because they emit bytes continuously, but a non-streaming call that runs past
+# the proxy limit is terminated regardless of what is set here.
+OPENAI_TIMEOUT_SEC: float = float(os.getenv("OPENAI_TIMEOUT_SEC", "90"))
+OPENAI_CONNECT_TIMEOUT_SEC: float = float(os.getenv("OPENAI_CONNECT_TIMEOUT_SEC", "10"))
+OPENAI_MAX_RETRIES: int = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+
 
 def get_openai_client() -> AsyncOpenAI:
     """Return the module-level AsyncOpenAI client, creating it on first call.
@@ -81,8 +90,14 @@ def get_openai_client() -> AsyncOpenAI:
             )
         _openai_client = AsyncOpenAI(
             api_key=api_key,
-            timeout=httpx.Timeout(90.0, connect=10.0),
-            max_retries=2,
+            timeout=httpx.Timeout(
+                OPENAI_TIMEOUT_SEC, connect=OPENAI_CONNECT_TIMEOUT_SEC
+            ),
+            max_retries=OPENAI_MAX_RETRIES,
         )
-        logger.info("AsyncOpenAI client initialised")
+        logger.info(
+            "AsyncOpenAI client initialised (timeout=%.0fs retries=%d)",
+            OPENAI_TIMEOUT_SEC,
+            OPENAI_MAX_RETRIES,
+        )
     return _openai_client

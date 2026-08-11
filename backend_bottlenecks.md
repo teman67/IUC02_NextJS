@@ -36,6 +36,99 @@ One caveat: `AGENTSEM_SSE_IDLE_TIMEOUT_SEC` defaults to 660 s to sit above
 `OLLAMA_READ_TIMEOUT_SEC` (600 s). If you lower the Ollama read timeout, lower this too, or an
 abandoned stream holds its slot longer than necessary.
 
+---
+
+## Heroku deployment (2026-08-11)
+
+The backend runs on Heroku. Four issues were platform-specific; **H1–H4 below are fixed**, H5 and
+H6 are decisions left to the operator.
+
+### Fixed
+
+**H1 — `.python-version` had invalid content.** Both `runtime.txt` and `.python-version` were
+tracked containing `python-3.11`. Heroku's docs are explicit that `.python-version` takes bare
+version numbers and that `python-3.13`-style strings are wrong. Now `3.11` (major-only, so security
+patches still arrive on each build); `runtime.txt` untracked.
+
+**H2 — the router cut the SSE stream mid-pipeline.** Heroku's router allows 30 s to first byte, then
+a rolling **55 s** window that every transmitted byte resets; silence past it terminates the
+response (H12). `run_pipeline` is legitimately silent for the whole duration of each LLM call — five
+or more such gaps per run — and `OLLAMA_READ_TIMEOUT_SEC` permits 600 s. `AGENTSEM_SSE_IDLE_TIMEOUT_SEC`
+(660 s) could never be reached, because the router gave up first.
+
+`event_generator` now waits on the queue in `HEARTBEAT_SEC` slices
+(`AGENTSEM_SSE_HEARTBEAT_SEC`, default 15 s) and emits an SSE comment (`: keepalive`) on each idle
+slice. Comments are ignored by `EventSource` clients but are bytes on the wire, which is what resets
+the router window. The idle timeout is now measured from the last *real* event, so its meaning is
+unchanged.
+
+Measured against a real uvicorn server, with each LLM call silent for 3 s and a 2 s stand-in window:
+
+| | Longest silence | Keepalives | Cut? |
+|---|---|---|---|
+| With heartbeat | 0.61 s | 24 | no |
+| Without (control) | 3.00 s | 0 | yes |
+
+The control reproduces the failure exactly, confirming the heartbeat is what prevents it. Note that
+in-process ASGI clients (`httpx.ASGITransport`) buffer the full response and cannot measure streaming
+cadence — this has to be tested over a real socket.
+
+**H3 — rate limits collapsed into one global bucket.** This is [B18](#b18), which the audit rated Low
+on the assumption of a direct connection. On Heroku all traffic arrives via the router, so
+`request.client.host` was the router's IP and every caller shared one bucket: one user hitting
+`5/minute` locked out everyone. The Procfile now runs with `--proxy-headers
+--forwarded-allow-ips="*"`, so `request.client.host` is the real client. `"*"` is safe specifically
+because the dyno is only reachable through the router.
+
+**H4 — cleanup.** 1,247 files of a committed virtualenv (`Lib/`, `Scripts/`, `pyvenv.cfg`) shipped in
+the slug; they are now in `.slugignore` and `.gitignore`, and untracked from git (working tree
+untouched). `.slugignore` also excludes `frontend/`, `Streamlit_app/` and `*.md` — none are read by
+the web process (verified: no runtime code opens a `.md`). Separately, `validate_api_key`'s helpful
+"localhost means the server, not your machine" guard only checked `os.getenv("VERCEL")`; Heroku sets
+`DYNO`, so the check is now `VERCEL or DYNO`.
+
+### Open — operator decisions
+
+**H5 — `/api/fix-validation-errors` (non-streaming) cannot work on Heroku.** It makes up to three
+sequential gpt-4o calls at `max_tokens=4500` plus SHACL validation before returning a first byte:
+minutes against a 30 s budget, so it always H12s. Related: `dependencies.py` sets
+`httpx.Timeout(90.0)`, which is 3× the router limit, and Heroku recommends app timeouts "well under
+30 seconds, such as 10 or 15." Point the frontend exclusively at
+`/api/fix-validation-errors-stream` and either remove the non-streaming route or mark it dev-only.
+`/api/analyze-validation` (gpt-4o-mini, 2000 tokens) is borderline and will occasionally H12.
+
+**H6 — dyno sizing.** Measured RSS of a booted worker with the ontology cache warm:
+
+| Stage | RSS |
+|---|---|
+| Baseline Python | 18 MB |
+| + FastAPI app | 98 MB |
+| + ontologies (B1 cache) | 182 MB |
+| + after serving requests | **210 MB** |
+
+210 MB is 41% of a 512 MB Basic/Standard-1X — comfortable at one worker. But each worker carries its
+own cache, as [B20](#b20) warned:
+
+```
+--workers 1  ~210 MB       --workers 3  ~592 MB   <- R14 on 512 MB
+--workers 2  ~401 MB       --workers 4  ~784 MB   <- R14
+```
+
+Stay at one worker on 512 MB, and consider `AGENTSEM_MAX_CONCURRENCY=1`, since Basic/Standard-1X
+gets roughly one CPU share and two concurrent pipelines (SHACL plus matching) mostly contend.
+
+### Notes
+
+- **Boot timeout is fine.** `uvicorn.Server.startup()` awaits `lifespan.startup()` *before* binding
+  the socket, so the ontology warm-up delays port binding and counts against Heroku's 60 s R10
+  window. At ~3.5 s there is ample margin; `WARM_ONTOLOGIES=0` is the escape hatch.
+- **Eco dynos sleep** after 30 minutes idle, so the next request pays the full cold start including
+  the ontology parse. Basic and above do not sleep.
+- **On dyno restart** Heroku sends SIGTERM with a 30 s grace period. Lifespan shutdown calls
+  `pipeline_executor.shutdown(wait=False, cancel_futures=True)`, but a thread already inside
+  `run_pipeline` is not interrupted, so an in-flight pipeline is lost at SIGKILL. Acceptable; setting
+  the cancel event on shutdown would make it tidier.
+
 All timings below were **measured on this machine** (12 cores, rdflib 7.5.0 / pyshacl 0.30.1 from
 the repo-root venv), not estimated. Where I could not measure something, I say so.
 
