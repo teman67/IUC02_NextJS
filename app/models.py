@@ -42,7 +42,9 @@ class AgentSemRequest(BaseModel):
     endpoint: str = "http://localhost:11434"
     max_opt: int = Field(default=1, ge=0, le=10)
     max_corr: int = Field(default=8, ge=0, le=10)
-    similarity_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Floor of 0.5: below that every ontology term matches every RDF term, which
+    # produced millions of match dicts (multi-GB) rather than useful signal.
+    similarity_threshold: float = Field(default=1.0, ge=0.5, le=1.0)
 
 
 class AgentSemValidateKeyRequest(BaseModel):

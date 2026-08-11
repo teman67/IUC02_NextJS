@@ -6,19 +6,26 @@ All streamlit / pyvis dependencies removed; uses standard logging instead.
 """
 
 import glob
+import heapq
 import logging
 import os
 import re
+import threading
 import urllib.parse
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import requests
 from rdflib import Graph, Literal, URIRef, BNode
 from pyshacl import validate as _shacl_validate
 
 logger = logging.getLogger("iuc02.agent_sem")
+
+# Cap on match dicts returned by find_matches.  Without this a low similarity
+# threshold retains one 9-key dict per (rdf_term x ontology_term) pair - over a
+# million of them, multiple GB, for an ordinary request.
+MAX_MATCHES: int = int(os.getenv("AGENTSEM_MAX_MATCHES", "500"))
 
 # ---------------------------------------------------------------------------
 # RDF → Graph data for visualisation
@@ -71,6 +78,9 @@ def _node_group(term) -> str:
     return "external"
 
 
+MAX_GRAPH_LINKS: int = int(os.getenv("AGENTSEM_MAX_GRAPH_LINKS", "2000"))
+
+
 def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
     """Parse RDF Turtle and return {nodes, links} for force-directed visualisation."""
     try:
@@ -81,6 +91,7 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
     node_map: Dict[str, Dict] = {}
     links: List[Dict] = []
     degree: Dict[str, int] = {}
+    truncated = False
 
     def add_node(term) -> str:
         nid = str(term)
@@ -103,6 +114,11 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
         return nid
 
     for s, p, o in g:
+        # Stop accumulating rather than building everything and truncating after -
+        # the old ordering bounded the response but not the work or the peak memory.
+        if len(links) >= MAX_GRAPH_LINKS:
+            truncated = True
+            break
         sid = add_node(s)
         oid = add_node(o)
         degree[sid] = degree.get(sid, 0) + 1
@@ -120,8 +136,9 @@ def rdf_to_graph_data(rdf_code: str, max_nodes: int = 150) -> Dict:
         top_ids = {nid for nid, _ in sorted(degree.items(), key=lambda x: -x[1])[:max_nodes]}
         nodes = [n for n in nodes if n["id"] in top_ids]
         links = [lk for lk in links if lk["source"] in top_ids and lk["target"] in top_ids]
+        truncated = True
 
-    return {"nodes": nodes, "links": links}
+    return {"nodes": nodes, "links": links, "truncated": truncated}
 
 
 def generate_graph_html(rdf_code: str) -> str:
@@ -137,15 +154,26 @@ def generate_graph_html(rdf_code: str) -> str:
     except Exception as exc:
         return f"<p style='color:red'>Error parsing RDF: {exc}</p>"
 
-    # Build directed graph, skipping blank nodes
+    # Build directed graph, skipping blank nodes.  Bounded before it reaches pyvis:
+    # generate_html() plus force-layout stabilisation is the most expensive work in
+    # the codebase, so an arbitrarily large graph must not get that far.
     nx_graph = nx.DiGraph()
+    truncated = False
     for s, p, o in g:
         if isinstance(s, BNode) or isinstance(o, BNode):
             continue
+        if nx_graph.number_of_edges() >= MAX_GRAPH_LINKS:
+            truncated = True
+            break
         nx_graph.add_edge(str(s), str(o), label=str(p))
 
     if nx_graph.number_of_nodes() == 0:
         return "<p style='color:#aaa;text-align:center;padding:40px'>No graph data to display.</p>"
+
+    if truncated:
+        logger.info(
+            "graph-html truncated to %d edges (MAX_GRAPH_LINKS)", nx_graph.number_of_edges()
+        )
 
     def _short(uri: str) -> str:
         lbl = uri.split("#")[-1] if "#" in uri else uri.split("/")[-1]
@@ -509,12 +537,17 @@ def basic_syntax_cleanup(rdf_text: str, shacl_text: str) -> Tuple[str, str]:
     return clean(rdf_text), clean(shacl_text)
 
 
-def validate_turtle_syntax(turtle_text: str) -> Tuple[bool, str]:
+def validate_turtle_syntax(turtle_text: str) -> Tuple[bool, str, Optional[Graph]]:
+    """Parse-check Turtle and hand back the parsed graph so callers can reuse it.
+
+    Returning the graph lets the pipeline avoid re-parsing the same text in
+    ValidatorAgent and the ontology matcher immediately afterwards.
+    """
     try:
-        Graph().parse(data=turtle_text, format="turtle")
-        return True, "Valid syntax"
+        g = Graph().parse(data=turtle_text, format="turtle")
+        return True, "Valid syntax", g
     except Exception as exc:
-        return False, str(exc)
+        return False, str(exc), None
 
 
 def extract_core_error(report: str) -> str:
@@ -806,14 +839,26 @@ class RDFGeneratorAgent:
 
 
 class ValidatorAgent:
-    def run(self, rdf_code: str, shacl_code: str) -> Tuple[bool, str]:
+    def run_graphs(self, rdf_graph: Graph, shacl_graph: Graph) -> Tuple[bool, str]:
+        """Validate already-parsed graphs.
+
+        Note: pyshacl may add triples to *rdf_graph* in place when inference is
+        enabled, so do not reuse the graph for anything else afterwards.
+        """
         try:
-            rdf_graph = Graph().parse(data=rdf_code, format="turtle")
-            shacl_graph = Graph().parse(data=shacl_code, format="turtle")
             conforms, _, report = _shacl_validate(data_graph=rdf_graph, shacl_graph=shacl_graph)
             return bool(conforms), str(report)
         except Exception as exc:
             return False, f"Validation Error: {exc}"
+
+    def run(self, rdf_code: str, shacl_code: str) -> Tuple[bool, str]:
+        """String entry point - parses, then delegates to run_graphs."""
+        try:
+            rdf_graph = Graph().parse(data=rdf_code, format="turtle")
+            shacl_graph = Graph().parse(data=shacl_code, format="turtle")
+        except Exception as exc:
+            return False, f"Validation Error: {exc}"
+        return self.run_graphs(rdf_graph, shacl_graph)
 
 
 class CritiqueAgent:
@@ -926,13 +971,43 @@ Return the corrected versions now:"""
 # OntologyMatcherAgent  (ported from agents.py)
 # ---------------------------------------------------------------------------
 
+_WORD_RE = re.compile(r'[A-Z][a-z]*|[a-z]+')
+
+
+def _word_set(local_lower: str) -> Set[str]:
+    return set(_WORD_RE.findall(local_lower))
+
+
 class OntologyMatcherAgent:
     def __init__(self, ontology_directory: str = "", push: "Push | None" = None) -> None:
         self.ontology_directory = ontology_directory or str(ONTOLOGY_DIR)
         self.ontology_graphs: Dict[str, Graph] = {}
         self.ontology_terms: Dict[str, Dict] = {}
+        # Inverted index: lowercased local name -> [(file, uri, info), ...].
+        # Turns exact matching from an O(n x 8601) scan into a dict lookup.
+        self._by_local: Dict[str, List[Tuple[str, str, Dict]]] = {}
+        # Word sets per distinct local name, precomputed so the fuzzy path never
+        # re-runs the tokenising regex inside its inner loop.
+        self._word_sets: Dict[str, Set[str]] = {}
         self._push = push
         self._load_ontologies()
+        self._build_index()
+
+    def _build_index(self) -> None:
+        """Index every ontology term by its lowercased local name."""
+        self._by_local.clear()
+        self._word_sets.clear()
+        for onto_file, terms in self.ontology_terms.items():
+            for uri, info in terms.items():
+                local = (info.get("local_name") or self._local_name(uri)).lower()
+                self._by_local.setdefault(local, []).append((onto_file, uri, info))
+                if local not in self._word_sets:
+                    self._word_sets[local] = _word_set(local)
+        logger.info(
+            "Ontology index built: %d terms -> %d distinct local names",
+            sum(len(t) for t in self.ontology_terms.values()),
+            len(self._by_local),
+        )
 
     def _load_ontologies(self) -> None:
         if not os.path.exists(self.ontology_directory):
@@ -1032,10 +1107,14 @@ class OntologyMatcherAgent:
     def _local_name(uri: str) -> str:
         return uri.split("#")[-1] if "#" in uri else uri.split("/")[-1]
 
-    def _extract_rdf_terms(self, rdf_code: str) -> Set[str]:
+    def _extract_rdf_terms(
+        self, rdf_code: str, rdf_graph: Optional[Graph] = None
+    ) -> Set[str]:
+        """Collect distinct URIRefs from *rdf_code*, or from *rdf_graph* if supplied."""
         try:
-            g = Graph()
-            g.parse(data=rdf_code, format="turtle")
+            g = rdf_graph if rdf_graph is not None else Graph().parse(
+                data=rdf_code, format="turtle"
+            )
             terms: Set[str] = set()
             for s, p, o in g:
                 for node in (s, p, o):
@@ -1046,73 +1125,155 @@ class OntologyMatcherAgent:
             logger.error("Error parsing RDF for term extraction: %s", exc)
             return set()
 
-    def _similarity(self, t1: str, t2: str) -> float:
-        l1 = self._local_name(t1).lower()
-        l2 = self._local_name(t2).lower()
+    @staticmethod
+    def _score_locals(
+        l1: str, w1: Set[str], l2: str, w2: Set[str], need: float
+    ) -> float:
+        """Score two lowercased local names.
+
+        *need* is the lowest score worth computing exactly; pairs that provably
+        cannot reach it return 0.0 without paying for SequenceMatcher.ratio(),
+        which is the O(n*m) step.  Pass need=0.0 for an exact score.
+
+        Scoring is identical to the original formula; only the work skipped for
+        pairs that cannot qualify has changed.
+        """
         if l1 == l2:
             return 1.0
         if l1 in l2 or l2 in l1:
-            diff = abs(len(l1) - len(l2))
-            return 0.9 if diff <= 2 else 0.3
-        seq_sim = SequenceMatcher(None, l1, l2).ratio()
-        w1 = set(re.findall(r'[A-Z][a-z]*|[a-z]+', l1))
-        w2 = set(re.findall(r'[A-Z][a-z]*|[a-z]+', l2))
+            return 0.9 if abs(len(l1) - len(l2)) <= 2 else 0.3
+
+        # Below here the score is max(ratio*0.7, word*0.8), so it can never exceed
+        # 0.8 - any caller needing more than that is asking for the impossible.
+        if need > 0.8:
+            return 0.0
+
         if w1 and w2:
             word_sim = len(w1 & w2) / len(w1 | w2)
             if word_sim < 0.8:
                 word_sim *= 0.5
         else:
-            word_sim = 0
-        final = max(seq_sim * 0.7, word_sim * 0.8)
+            word_sim = 0.0
+        word_component = word_sim * 0.8
+
+        if word_component < need:
+            # Cheap upper bounds on ratio(): real_quick_ratio() is O(1) on lengths,
+            # quick_ratio() is O(n) on character counts.  Both bound ratio() from
+            # above, so failing either proves the pair cannot reach `need`.
+            sm = SequenceMatcher(None, l1, l2)
+            if sm.real_quick_ratio() * 0.7 < need or sm.quick_ratio() * 0.7 < need:
+                return 0.0
+        else:
+            sm = SequenceMatcher(None, l1, l2)
+
+        final = max(sm.ratio() * 0.7, word_component)
         if final < 0.6:
             final *= 0.5
         return min(final, 1.0)
 
-    def find_matches(self, rdf_code: str, similarity_threshold: float = 0.7) -> Dict:
+    def _similarity(self, t1: str, t2: str) -> float:
+        """Exact similarity score for two URIs (kept for callers outside find_matches)."""
+        l1 = self._local_name(t1).lower()
+        l2 = self._local_name(t2).lower()
+        return self._score_locals(l1, _word_set(l1), l2, _word_set(l2), 0.0)
+
+    def _match_dict(
+        self, rdf_term: str, onto_file: str, onto_uri: str, onto_info: Dict, score: float
+    ) -> Dict:
+        comment = onto_info.get("comment")
+        return {
+            "rdf_term": rdf_term,
+            "rdf_local_name": self._local_name(rdf_term),
+            "ontology_file": onto_file,
+            "ontology_term": onto_uri,
+            "ontology_local_name": onto_info["local_name"],
+            "ontology_type": onto_info["type"],
+            "ontology_label": onto_info["label"],
+            # Stored pre-truncated: the full comment was the largest field in each
+            # dict and only the first 200 chars are ever rendered.
+            "ontology_comment": comment[:200] if comment else None,
+            "similarity_score": score,
+        }
+
+    def _exact_matches(self, rdf_terms: Set[str]) -> List[Dict]:
+        """Index lookup - replaces the full cross-product when threshold is 1.0."""
+        out: List[Dict] = []
+        for rdf_term in rdf_terms:
+            local = self._local_name(rdf_term).lower()
+            for onto_file, onto_uri, onto_info in self._by_local.get(local, ()):
+                out.append(self._match_dict(rdf_term, onto_file, onto_uri, onto_info, 1.0))
+        return out
+
+    def _fuzzy_matches(self, rdf_terms: Set[str], threshold: float) -> List[Dict]:
+        """Scan distinct local names (not all terms), with cheap early rejection."""
+        # A score under 0.6 is halved, so it can then only land under 0.3 - meaning
+        # nothing below 0.6 pre-halving can satisfy a threshold of 0.5 or more.
+        need = threshold if threshold >= 0.6 else 0.6
+        out: List[Dict] = []
+        for rdf_term in rdf_terms:
+            l1 = self._local_name(rdf_term).lower()
+            w1 = _word_set(l1)
+            for local, entries in self._by_local.items():
+                score = self._score_locals(l1, w1, local, self._word_sets[local], need)
+                if score >= threshold:
+                    for onto_file, onto_uri, onto_info in entries:
+                        out.append(
+                            self._match_dict(rdf_term, onto_file, onto_uri, onto_info, score)
+                        )
+        return out
+
+    def find_matches(
+        self,
+        rdf_code: str,
+        similarity_threshold: float = 0.7,
+        rdf_graph: Optional[Graph] = None,
+    ) -> Dict:
         if not self.ontology_terms:
             return {"status": "no_ontologies", "message": "No ontology files loaded.", "matches": []}
-        rdf_terms = self._extract_rdf_terms(rdf_code)
+        rdf_terms = self._extract_rdf_terms(rdf_code, rdf_graph)
         if not rdf_terms:
             return {"status": "no_rdf_terms", "message": "No terms extracted from RDF.", "matches": []}
-        all_matches: list[Dict] = []
-        exact_count = 0
-        similar_count = 0
-        for rdf_term in rdf_terms:
-            for onto_file, onto_terms in self.ontology_terms.items():
-                for onto_uri, onto_info in onto_terms.items():
-                    score = self._similarity(rdf_term, onto_uri)
-                    if score >= similarity_threshold:
-                        m = {
-                            "rdf_term": rdf_term,
-                            "rdf_local_name": self._local_name(rdf_term),
-                            "ontology_file": onto_file,
-                            "ontology_term": onto_uri,
-                            "ontology_local_name": onto_info["local_name"],
-                            "ontology_type": onto_info["type"],
-                            "ontology_label": onto_info["label"],
-                            "ontology_comment": onto_info["comment"],
-                            "similarity_score": score,
-                        }
-                        all_matches.append(m)
-                        if score == 1.0:
-                            exact_count += 1
-                        else:
-                            similar_count += 1
-        all_matches.sort(key=lambda x: x["similarity_score"], reverse=True)
+
+        if similarity_threshold >= 1.0:
+            all_matches = self._exact_matches(rdf_terms)
+        else:
+            all_matches = self._fuzzy_matches(rdf_terms, similarity_threshold)
+
+        exact_count = sum(1 for m in all_matches if m["similarity_score"] == 1.0)
+        similar_count = len(all_matches) - exact_count
+        total_found = len(all_matches)
+
+        # Bounded selection: nlargest keeps ties in encounter order, same as a
+        # stable reverse sort, but never holds more than MAX_MATCHES results.
+        if total_found > MAX_MATCHES:
+            all_matches = heapq.nlargest(
+                MAX_MATCHES, all_matches, key=lambda x: x["similarity_score"]
+            )
+            logger.info("find_matches capped %d matches to %d", total_found, MAX_MATCHES)
+        else:
+            all_matches.sort(key=lambda x: x["similarity_score"], reverse=True)
+
         total_onto = sum(len(t) for t in self.ontology_terms.values())
         return {
             "status": "success",
             "total_rdf_terms": len(rdf_terms),
             "total_ontology_terms": total_onto,
-            "total_matches": len(all_matches),
+            "total_matches": total_found,
             "exact_matches": exact_count,
             "similar_matches": similar_count,
             "matches": all_matches,
+            "returned_matches": len(all_matches),
+            "truncated": total_found > len(all_matches),
             "similarity_threshold": similarity_threshold,
         }
 
-    def run(self, rdf_code: str, similarity_threshold: float = 0.7) -> str:
-        results = self.find_matches(rdf_code, similarity_threshold)
+    def run(
+        self,
+        rdf_code: str,
+        similarity_threshold: float = 0.7,
+        rdf_graph: Optional[Graph] = None,
+    ) -> str:
+        results = self.find_matches(rdf_code, similarity_threshold, rdf_graph)
         if results["status"] != "success":
             return results.get("message", "No analysis available.")
         report = [
@@ -1125,6 +1286,11 @@ class OntologyMatcherAgent:
             f"- Similarity Threshold: {results['similarity_threshold']}",
             "",
         ]
+        if results.get("truncated"):
+            report.append(
+                f"> Showing the top {results['returned_matches']} of "
+                f"{results['total_matches']} matches by score.\n"
+            )
         if results["matches"]:
             report.append("## Match Details")
             current = ""
@@ -1244,8 +1410,14 @@ class OntologyMatcherAgent:
             shacl = block + shacl
         return rdf, shacl
 
-    def replace_exact_matches(self, rdf: str, shacl: str, similarity_threshold: float = 1.0) -> Tuple[str, str, List[Dict]]:
-        results = self.find_matches(rdf, similarity_threshold)
+    def replace_exact_matches(
+        self,
+        rdf: str,
+        shacl: str,
+        similarity_threshold: float = 1.0,
+        rdf_graph: Optional[Graph] = None,
+    ) -> Tuple[str, str, List[Dict]]:
+        results = self.find_matches(rdf, similarity_threshold, rdf_graph)
         if results["status"] != "success":
             return rdf, shacl, []
         exact = [m for m in results["matches"] if m["similarity_score"] == 1.0]
@@ -1281,6 +1453,37 @@ class OntologyMatcherAgent:
 
 
 # ---------------------------------------------------------------------------
+# Process-wide ontology cache
+#
+# Parsing the ontology directory costs ~2.6 s and ~64 MB.  The graphs are only
+# ever read (subjects/objects queries and membership tests), so a single shared
+# instance is safe and removes that cost from the per-request path entirely.
+# ---------------------------------------------------------------------------
+
+_matcher_lock = threading.Lock()
+_matcher_singleton: Optional[OntologyMatcherAgent] = None
+
+
+def get_ontology_matcher(push: "Push | None" = None) -> OntologyMatcherAgent:
+    """Return the shared OntologyMatcherAgent, loading it on first use.
+
+    *push* only receives per-file progress on the cold load; later callers get
+    the already-built instance and should report the term count instead.
+    """
+    global _matcher_singleton
+    with _matcher_lock:
+        if _matcher_singleton is None:
+            logger.info("Loading ontologies (cold start)")
+            _matcher_singleton = OntologyMatcherAgent(push=push)
+        return _matcher_singleton
+
+
+def ontology_cache_is_warm() -> bool:
+    """True once the shared matcher has been built."""
+    return _matcher_singleton is not None
+
+
+# ---------------------------------------------------------------------------
 # SemanticPipelineAgent  (ported from controller.py)
 # ---------------------------------------------------------------------------
 
@@ -1294,17 +1497,19 @@ class SemanticPipelineAgent:
         self.critic = CritiqueAgent(model_info)
         self.ontology_mapper = OntologyMapperAgent(model_info)
         self.corrector = CorrectionAgent(model_info)
-        self.ontology_matcher = OntologyMatcherAgent(push=push)
+        # Shared, process-wide instance - not re-parsed per request.
+        self.ontology_matcher = get_ontology_matcher(push=push)
 
     def apply_ontology_replacements(
         self,
         rdf_code: str,
         shacl_code: str,
         similarity_threshold: float = 1.0,
+        rdf_graph: Optional[Graph] = None,
     ) -> Tuple[str, str, str, Dict]:
         try:
             replaced_rdf, replaced_shacl, rep_list = self.ontology_matcher.replace_exact_matches(
-                rdf_code, shacl_code, similarity_threshold
+                rdf_code, shacl_code, similarity_threshold, rdf_graph
             )
             report = self.ontology_matcher.generate_replacement_report(rep_list)
             validation: Dict = {"replacements_made": len(rep_list), "conforms": False, "report": "No replacements"}
@@ -1334,11 +1539,24 @@ def run_pipeline(
     max_corr: int,
     similarity_threshold: float,
     push: Push,
+    cancel: Optional[threading.Event] = None,
 ) -> None:
     """
     Run the full AgentSem pipeline synchronously, emitting progress events via push().
-    Designed to run inside asyncio.to_thread().
+    Designed to run inside a worker thread.
+
+    *cancel* is checked at every step and loop boundary.  Because a thread cannot
+    be interrupted from outside, this is the only way an abandoned request stops
+    making (billable) LLM calls - the caller sets the event when the client goes
+    away or the stream times out.
     """
+
+    def cancelled(where: str) -> bool:
+        if cancel is not None and cancel.is_set():
+            logger.info("Pipeline cancelled by client; aborting at %s", where)
+            return True
+        return False
+
     try:
         # Validate API key first
         provider = model_info.get("provider", "")
@@ -1349,20 +1567,28 @@ def run_pipeline(
             push({"type": "error", "message": f"API key validation failed: {key_msg}"})
             return
 
+        if cancelled("start"):
+            return
+
         # ── Ontology loading ─────────────────────────────────────────────
         push({"type": "progress", "phase": "loading_ontologies",
-              "message": "Loading ontology files from disk..."})
+              "message": "Loading ontology files from disk..."
+                         if not ontology_cache_is_warm() else "Using cached ontologies..."})
         agent = SemanticPipelineAgent(model_info, max_opt, max_corr, push=push)
         push({"type": "step", "step": "ontologies_loaded",
               "count": len(agent.ontology_matcher.ontology_graphs)})
 
         # ── Step 1: Initial generation ────────────────────────────────────
+        if cancelled("initial generation"):
+            return
         push({"type": "progress", "phase": "generating", "message": "Generating initial RDF & SHACL..."})
         rdf_code, shacl_code = agent.generator.run(user_input)
         push({"type": "step", "step": "initial_generation", "rdf": rdf_code, "shacl": shacl_code})
 
         # ── Step 2: Optimization passes ───────────────────────────────────
         for i in range(max_opt):
+            if cancelled(f"optimization pass {i + 1}"):
+                return
             push({"type": "progress", "phase": "optimizing", "message": f"Optimization pass {i + 1}/{max_opt}..."})
             critique = agent.critic.run(rdf_code, shacl_code)
             push({"type": "step", "step": "critique", "pass": i + 1, "critique": critique})
@@ -1373,9 +1599,13 @@ def run_pipeline(
         rdf_code, shacl_code = basic_syntax_cleanup(rdf_code, shacl_code)
 
         # ── Step 3: Validation + correction loop ──────────────────────────
+        if cancelled("validation"):
+            return
         push({"type": "progress", "phase": "validating", "message": "Validating RDF against SHACL..."})
-        rdf_ok, rdf_err = validate_turtle_syntax(rdf_code)
-        shacl_ok, shacl_err = validate_turtle_syntax(shacl_code)
+        # validate_turtle_syntax hands back the parsed graphs, so the validator
+        # below does not re-parse the same text.
+        rdf_ok, rdf_err, rdf_graph = validate_turtle_syntax(rdf_code)
+        shacl_ok, shacl_err, shacl_graph = validate_turtle_syntax(shacl_code)
 
         if not rdf_ok or not shacl_ok:
             report = (
@@ -1385,7 +1615,7 @@ def run_pipeline(
             )
             conforms = False
         else:
-            conforms, report = agent.validator.run(rdf_code, shacl_code)
+            conforms, report = agent.validator.run_graphs(rdf_graph, shacl_graph)
 
         push({"type": "step", "step": "validation", "attempt": 0, "conforms": conforms, "report": report})
 
@@ -1394,6 +1624,8 @@ def run_pipeline(
         consecutive_failures = 0
 
         while not conforms and correction_attempt < max_corr:
+            if cancelled(f"correction attempt {correction_attempt + 1}"):
+                return
             correction_attempt += 1
             core_error = extract_core_error(report)
             error_type = "syntax" if is_syntax_error(report) else "validation"
@@ -1426,10 +1658,10 @@ def run_pipeline(
             previous_core_errors.append(core_error)
             rdf_code, shacl_code = basic_syntax_cleanup(rdf_code, shacl_code)
 
-            rdf_ok2, rdf_err2 = validate_turtle_syntax(rdf_code)
-            shacl_ok2, shacl_err2 = validate_turtle_syntax(shacl_code)
+            rdf_ok2, rdf_err2, rdf_graph2 = validate_turtle_syntax(rdf_code)
+            shacl_ok2, shacl_err2, shacl_graph2 = validate_turtle_syntax(shacl_code)
             if rdf_ok2 and shacl_ok2:
-                conforms, report = agent.validator.run(rdf_code, shacl_code)
+                conforms, report = agent.validator.run_graphs(rdf_graph2, shacl_graph2)
                 if conforms:
                     consecutive_failures = 0
             else:
@@ -1445,6 +1677,8 @@ def run_pipeline(
                   "conforms": conforms, "report": report})
 
         # ── Step 4: Ontology mapping ──────────────────────────────────────
+        if cancelled("ontology mapping"):
+            return
         push({"type": "progress", "phase": "ontology_mapping", "message": "Generating ontology term suggestions..."})
         try:
             ontology_mapping = agent.ontology_mapper.run(user_input)
@@ -1452,19 +1686,29 @@ def run_pipeline(
             ontology_mapping = f"Ontology mapping failed: {exc}"
         push({"type": "step", "step": "ontology_mapping", "mappings": ontology_mapping})
 
+        # Parse the final RDF once and share it across steps 5 and 6, which both
+        # only need its term set.
+        _, _, final_rdf_graph = validate_turtle_syntax(rdf_code)
+
         # ── Step 5: Ontology matching ─────────────────────────────────────
+        if cancelled("ontology matching"):
+            return
         push({"type": "progress", "phase": "ontology_matching", "message": "Analyzing ontology term matches..."})
         try:
-            ontology_analysis = agent.ontology_matcher.run(rdf_code, similarity_threshold)
+            ontology_analysis = agent.ontology_matcher.run(
+                rdf_code, similarity_threshold, final_rdf_graph
+            )
         except Exception as exc:
             ontology_analysis = f"Ontology matching failed: {exc}"
         push({"type": "step", "step": "ontology_matching", "analysis": ontology_analysis})
 
         # ── Step 6: Ontology replacement ──────────────────────────────────
+        if cancelled("ontology replacement"):
+            return
         push({"type": "progress", "phase": "ontology_replacement", "message": "Applying ontology term replacements..."})
         try:
             replaced_rdf, replaced_shacl, rep_report, rep_validation = agent.apply_ontology_replacements(
-                rdf_code, shacl_code, similarity_threshold
+                rdf_code, shacl_code, similarity_threshold, final_rdf_graph
             )
             replacement_count = rep_validation.get("replacements_made", 0)
             if replacement_count > 0:
